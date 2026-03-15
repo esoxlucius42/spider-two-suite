@@ -1,3 +1,4 @@
+#include "spider/card_sprite.hpp"
 #include "spider/game_session.hpp"
 #include "spider/layout.hpp"
 
@@ -73,7 +74,7 @@ auto atlas_cell(int row, int column) -> AtlasCell
 
 auto atlas_for_card(const spider::Card& card) -> AtlasCell
 {
-    const int row = card.suit == spider::Suit::spades ? 0 : 1;
+    const int row = spider::atlas_row_for_suit(card.suit);
     const int column = spider::rank_value(card.rank) - 1;
     return atlas_cell(row, column);
 }

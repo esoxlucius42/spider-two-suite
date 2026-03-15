@@ -1,3 +1,4 @@
+#include "spider/card_sprite.hpp"
 #include "spider/game_state.hpp"
 #include "spider/game_session.hpp"
 #include "spider/layout.hpp"
@@ -53,6 +54,11 @@ int main()
 {
     using spider::GameState;
     using spider::Move;
+
+    {
+        expect(spider::atlas_row_for_suit(spider::Suit::spades) == 3, "spades should use the spade sprite row");
+        expect(spider::atlas_row_for_suit(spider::Suit::hearts) == 2, "hearts should use the heart sprite row");
+    }
 
     {
         GameState state = GameState::create_new_game(7);
