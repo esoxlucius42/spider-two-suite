@@ -94,7 +94,7 @@ auto GameState::create_new_game(std::uint64_t seed) -> GameState
     std::size_t cursor = 0;
 
     for (std::size_t stack_index = 0; stack_index < kTableauStacks; ++stack_index) {
-        const std::size_t cards_in_stack = stack_index < 4 ? 6 : 5;
+        const std::size_t cards_in_stack = stack_index < 4 ? 5 : 4;
         auto& stack = state.tableau_[stack_index];
         stack.reserve(cards_in_stack);
 

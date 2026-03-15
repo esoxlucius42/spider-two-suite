@@ -10,6 +10,8 @@
 #include <fstream>
 #include <cstdlib>
 #include <iostream>
+#include <iterator>
+#include <string>
 
 namespace {
 
@@ -99,17 +101,21 @@ int main()
 
     {
         GameState state = GameState::create_new_game(7);
+        const std::array<std::size_t, 10> expected_counts {5, 5, 5, 5, 4, 4, 4, 4, 4, 4};
+        const std::array<std::size_t, 10> expected_hidden {4, 4, 4, 4, 3, 3, 3, 3, 3, 3};
 
         std::size_t tableau_cards = 0;
         for (std::size_t stack_index = 0; stack_index < GameState::kTableauStacks; ++stack_index) {
             const auto& stack = state.tableau()[stack_index];
             tableau_cards += stack.size();
             expect(!stack.empty(), "each tableau stack should receive cards");
+            expect(stack.size() == expected_counts[stack_index], "fresh game should deal the expected count into each tableau stack");
+            expect(state.hidden_card_count(stack_index) == expected_hidden[stack_index], "fresh game should hide the expected number of cards in each tableau stack");
             expect(stack.back().face_up, "top tableau card should start face up");
         }
 
-        expect(tableau_cards == 54, "initial tableau should contain 54 cards");
-        expect(state.stock_rows_remaining() == GameState::kStockRows, "game should start with five stock rows");
+        expect(tableau_cards == 44, "initial tableau should contain 44 cards");
+        expect(state.stock_rows_remaining() == GameState::kStockRows, "game should start with six stock rows");
     }
 
     {
@@ -165,8 +171,8 @@ int main()
     }
 
     {
-        const std::array<std::size_t, 10> small_counts {6, 6, 6, 6, 5, 5, 5, 5, 5, 5};
-        const std::array<std::size_t, 10> small_hidden {5, 5, 5, 5, 4, 4, 4, 4, 4, 4};
+        const std::array<std::size_t, 10> small_counts {5, 5, 5, 5, 4, 4, 4, 4, 4, 4};
+        const std::array<std::size_t, 10> small_hidden {4, 4, 4, 4, 3, 3, 3, 3, 3, 3};
         const std::array<std::size_t, 10> tall_counts {22, 21, 23, 20, 22, 21, 24, 20, 21, 22};
         const std::array<std::size_t, 10> tall_hidden {7, 7, 8, 6, 7, 7, 8, 6, 7, 7};
 
@@ -266,6 +272,31 @@ int main()
         spider::GameSession resumed = spider::resume_or_create_session(save_path, 4321);
         expect(resumed.state().seed() == 4321, "invalid saves should fall back to a fresh deal");
         expect(spider::load_last_session(save_path).status == spider::LoadLastSessionStatus::not_found, "invalid save should be cleared after fallback");
+    }
+
+    {
+        const auto save_path = test_save_path("legacy-v1-session.txt");
+        reset_test_save(save_path);
+
+        spider::GameSession session = spider::GameSession::create_new_game(77);
+        spider::save_last_session(save_path, session);
+
+        std::ifstream input(save_path);
+        expect(static_cast<bool>(input), "test should be able to read a saved session");
+        std::string save_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+        input.close();
+        expect(save_text.rfind("SPIDER_SESSION_V2\n", 0) == 0, "saved sessions should use the current persistence header");
+
+        save_text.replace(0, std::string("SPIDER_SESSION_V2").size(), "SPIDER_SESSION_V1");
+
+        std::ofstream output(save_path, std::ios::trunc);
+        expect(static_cast<bool>(output), "test should be able to overwrite a saved session");
+        output << save_text;
+        output.close();
+
+        spider::GameSession resumed = spider::resume_or_create_session(save_path, 9876);
+        expect(resumed.state().seed() == 9876, "legacy v1 saves should fall back to a fresh deal");
+        expect(spider::load_last_session(save_path).status == spider::LoadLastSessionStatus::not_found, "legacy v1 saves should be cleared after fallback");
     }
 
     return 0;

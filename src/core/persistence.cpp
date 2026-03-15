@@ -14,7 +14,8 @@ namespace spider {
 
 namespace {
 
-constexpr std::string_view kFormatHeader = "SPIDER_SESSION_V1";
+constexpr std::string_view kCurrentFormatHeader = "SPIDER_SESSION_V2";
+constexpr std::string_view kLegacyFormatHeader = "SPIDER_SESSION_V1";
 
 auto card_identifier_index(const Card& card) -> std::size_t
 {
@@ -126,7 +127,7 @@ auto write_state(std::ostream& output, const GameState& state) -> void
 
 auto write_session(std::ostream& output, const GameSession& session) -> void
 {
-    output << kFormatHeader << '\n';
+    output << kCurrentFormatHeader << '\n';
     output << "CURRENT_STATE\n";
     write_state(output, session.state());
     output << "UNDO_COUNT " << session.undo_history().size() << '\n';
@@ -296,7 +297,21 @@ auto parse_session(std::string_view text, std::string& error) -> std::optional<G
 {
     std::istringstream input {std::string(text)};
 
-    if (!read_label(input, kFormatHeader, error) || !read_label(input, "CURRENT_STATE", error)) {
+    std::string format_header;
+    if (!(input >> format_header)) {
+        error = "unexpected end of save data";
+        return std::nullopt;
+    }
+    if (format_header == kLegacyFormatHeader) {
+        error = "save format v1 is no longer supported after the opening deal change";
+        return std::nullopt;
+    }
+    if (format_header != kCurrentFormatHeader) {
+        error = "expected supported save format header";
+        return std::nullopt;
+    }
+
+    if (!read_label(input, "CURRENT_STATE", error)) {
         return std::nullopt;
     }
 

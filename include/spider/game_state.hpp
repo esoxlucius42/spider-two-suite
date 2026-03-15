@@ -21,7 +21,7 @@ public:
     static constexpr std::size_t kTableauStacks = 10;
     static constexpr std::size_t kCompletedRunLength = 13;
     static constexpr std::size_t kStockRowSize = 10;
-    static constexpr std::size_t kStockRows = 5;
+    static constexpr std::size_t kStockRows = 6;
     static constexpr std::size_t kWinningCompletedRuns = 8;
 
     [[nodiscard]] static auto create_new_game(std::uint64_t seed) -> GameState;
