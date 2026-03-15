@@ -7,6 +7,8 @@
 - Run the single existing test target directly: `./build/test-core/spider_core_tests`
 - Run the app smoke test directly: `./build/test-core/spider_app_smoke_test`
 - Configure the full app build once SDL dependencies are installed: `cmake -S . -B build/app-default`
+- Build the real SDL app binary before any visual/manual UI check: `cmake --build build/app-default`
+- When manually testing the game window, always launch `./build/app-default/spider_two_suites` after rebuilding so you do not accidentally inspect a stale binary.
 - On this machine, prefer `rpm-ostree install SDL3-devel SDL3_image-devel` over `dnf`; `dnf` is blocked here.
 
 The real SDL app target requires both `SDL3` and `SDL3_image` CMake packages.

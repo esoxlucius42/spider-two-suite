@@ -3,6 +3,7 @@
 #include "spider/layout.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdlib>
 #include <iostream>
 
@@ -39,6 +40,11 @@ void expect_same_state(const spider::GameState& left, const spider::GameState& r
             expect(same_card(left_stack[card_index], right_stack[card_index]), message);
         }
     }
+}
+
+void expect_near(float left, float right, float epsilon, const char* message)
+{
+    expect(std::fabs(left - right) <= epsilon, message);
 }
 
 } // namespace
@@ -126,6 +132,18 @@ int main()
 
         expect(roomy.stack_x[1] > roomy.stack_x[0], "stack x positions should increase left to right");
         expect(tight.card_width < roomy.card_width, "card width should shrink on narrower windows");
+        expect_near(roomy.top_controls_bottom, roomy.outer_margin + roomy.top_controls_height, 0.01F, "roomy layout should expose the controls band bottom");
+        expect_near(tight.top_controls_bottom, tight.outer_margin + tight.top_controls_height, 0.01F, "tight layout should expose the controls band bottom");
+        expect(roomy.top_row_y >= roomy.top_controls_bottom, "top row should start below the controls band");
+        expect(roomy.top_row_bottom <= roomy.playfield_top, "top row should fit before the playfield begins");
+        expect(tight.top_row_y >= tight.top_controls_bottom, "tight layout should keep the top row below controls");
+        expect(tight.top_row_bottom <= tight.playfield_top, "tight layout should keep the top row above the playfield");
+        expect_near(roomy.top_row_y - roomy.top_controls_bottom, roomy.top_row_gap, 0.01F, "roomy layout should reserve the configured gap above the top row");
+        expect_near(roomy.top_row_bottom - roomy.top_row_y, roomy.card_height, 0.01F, "roomy top row should reuse the card height");
+        expect_near(tight.top_row_y - tight.top_controls_bottom, tight.top_row_gap, 0.01F, "tight layout should reserve the configured gap above the top row");
+        expect_near(tight.top_row_bottom - tight.top_row_y, tight.card_height, 0.01F, "tight top row should reuse the card height");
+        expect_near(roomy.playfield_top - roomy.top_row_bottom, roomy.top_row_gap, 0.01F, "roomy layout should reserve the configured gap below the top row");
+        expect_near(tight.playfield_top - tight.top_row_bottom, tight.top_row_gap, 0.01F, "tight layout should reserve the configured gap below the top row");
         expect(tight.face_up_step <= roomy.face_up_step, "face-up spacing should compress for tighter layouts");
         expect(tight.scroll_offset >= 0.0F, "scroll offset should remain non-negative");
         expect(tight.content_height >= tight.playfield_height, "tall layouts should produce scrollable content");

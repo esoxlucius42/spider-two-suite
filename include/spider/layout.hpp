@@ -8,6 +8,10 @@ namespace spider {
 struct LayoutMetrics {
     float outer_margin {};
     float top_controls_height {};
+    float top_controls_bottom {};
+    float top_row_gap {};
+    float top_row_y {};
+    float top_row_bottom {};
     float playfield_top {};
     float playfield_height {};
     float card_width {};

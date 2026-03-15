@@ -24,7 +24,11 @@ auto compute_layout(
     layout.card_height = layout.card_width * 1.45F;
     const float raw_face_down_step = std::clamp(layout.card_height * 0.10F, 14.0F, 24.0F);
     const float raw_face_up_step = std::clamp(layout.card_height * 0.22F, 26.0F, 52.0F);
-    layout.playfield_top = layout.outer_margin + layout.top_controls_height;
+    layout.top_controls_bottom = layout.outer_margin + layout.top_controls_height;
+    layout.top_row_gap = std::clamp(layout.card_height * 0.12F, 12.0F, 22.0F);
+    layout.top_row_y = layout.top_controls_bottom + layout.top_row_gap;
+    layout.top_row_bottom = layout.top_row_y + layout.card_height;
+    layout.playfield_top = layout.top_row_bottom + layout.top_row_gap;
     layout.playfield_height = height - layout.playfield_top - layout.outer_margin;
     layout.stack_slot_height = layout.card_height + 18.0F;
 

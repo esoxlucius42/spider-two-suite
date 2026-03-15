@@ -290,17 +290,13 @@ private:
         };
     }
 
-    auto stock_pile_bounds(const spider::LayoutMetrics& layout, int window_width) const -> SDL_FRect
+    auto top_row_slot_rect(const spider::LayoutMetrics& layout, std::size_t slot_index) const -> SDL_FRect
     {
-        const float pile_width = layout.card_width * 0.58F;
-        const float pile_height = layout.card_height * 0.58F;
-        const float pile_x = static_cast<float>(window_width) - layout.outer_margin - pile_width - 8.0F;
-        const float pile_y = layout.outer_margin + 7.0F;
         return SDL_FRect {
-            pile_x - 18.0F,
-            pile_y,
-            pile_width + 18.0F,
-            pile_height + 16.0F,
+            layout.stack_x[slot_index],
+            layout.top_row_y,
+            layout.card_width,
+            layout.card_height,
         };
     }
 
@@ -309,7 +305,7 @@ private:
         const float top_y = layout.outer_margin + 7.0F;
         const float button_height = layout.top_controls_height - 20.0F;
         const float button_gap = std::clamp(layout.outer_margin * 0.35F, 10.0F, 18.0F);
-        const float right_reserved = layout.card_width * 0.58F + 120.0F;
+        const float right_reserved = 120.0F;
         const float available_width = std::max(448.0F, static_cast<float>(window_width) - layout.outer_margin * 2.0F - right_reserved);
         const float button_width = std::clamp((available_width - button_gap * 3.0F) / 4.0F, 104.0F, 156.0F);
 
@@ -617,7 +613,7 @@ private:
             }
         }
 
-        if (point_in_rect(x, y, stock_pile_bounds(layout, window_width))) {
+        if (point_in_rect(x, y, top_row_slot_rect(layout, 0)) && state().can_deal_from_stock()) {
             deal_stock();
             return;
         }
@@ -782,7 +778,9 @@ private:
         SDL_SetRenderDrawColor(renderer_, hovered ? 236 : 180, hovered ? 234 : 214, hovered ? 221 : 226, 255);
         SDL_RenderRect(renderer_, &button.bounds);
 
-        const float text_scale = std::max(2.3F, button.bounds.h / 13.0F);
+        const float horizontal_padding = 16.0F;
+        const float width_limited_scale = (button.bounds.w - horizontal_padding) / std::max(1.0F, static_cast<float>(button.label.size() * 6U - 1U));
+        const float text_scale = std::clamp(std::min(button.bounds.h / 13.0F, width_limited_scale), 1.6F, 2.6F);
         const float text_width = static_cast<float>(button.label.size()) * 6.0F * text_scale - text_scale;
         const float text_x = button.bounds.x + (button.bounds.w - text_width) * 0.5F;
         const float text_y = button.bounds.y + (button.bounds.h - (7.0F * text_scale)) * 0.5F;
@@ -814,31 +812,49 @@ private:
         }
     }
 
-    void render_stock_pile(const spider::LayoutMetrics& layout, int window_width)
+    void draw_placeholder_slot(const SDL_FRect& slot, bool filled)
     {
-        const int rows = static_cast<int>(state().stock_rows_remaining());
-        const float pile_width = layout.card_width * 0.58F;
-        const float pile_height = layout.card_height * 0.58F;
-        const float pile_x = static_cast<float>(window_width) - layout.outer_margin - pile_width - 8.0F;
-        const float pile_y = layout.outer_margin + 7.0F;
+        SDL_SetRenderDrawColor(renderer_, filled ? 52 : 38, filled ? 70 : 54, filled ? 84 : 64, 255);
+        SDL_RenderFillRect(renderer_, &slot);
+        SDL_SetRenderDrawColor(renderer_, filled ? 208 : 110, filled ? 214 : 124, filled ? 223 : 92, 255);
+        SDL_RenderRect(renderer_, &slot);
+    }
 
-        for (int index = 0; index < std::max(rows, 1); ++index) {
+    void render_card_back_stack(const SDL_FRect& slot, int layers)
+    {
+        for (int index = 0; index < std::max(layers, 1); ++index) {
             const SDL_FRect destination {
-                pile_x - static_cast<float>(std::min(index, 3)) * 6.0F,
-                pile_y + static_cast<float>(std::min(index, 3)) * 4.0F,
-                pile_width,
-                pile_height,
+                slot.x - static_cast<float>(std::min(index, 3)) * 5.0F,
+                slot.y + static_cast<float>(std::min(index, 3)) * 3.0F,
+                slot.w,
+                slot.h,
             };
             draw_card_shadow(destination);
             const auto atlas = atlas_for_card_back();
             const SDL_FRect source {atlas.x, atlas.y, atlas.w, atlas.h};
             SDL_RenderTexture(renderer_, cards_texture_, &source, &destination);
         }
+    }
 
-        const SDL_Color text_color = state().can_deal_from_stock() ? SDL_Color {234, 236, 233, 255} : SDL_Color {150, 160, 160, 255};
-        const SDL_Color count_color = state().can_deal_from_stock() ? SDL_Color {250, 245, 214, 255} : SDL_Color {150, 160, 160, 255};
-        draw_text(renderer_, "STOCK", pile_x - 8.0F, pile_y + pile_height + 12.0F, 2.4F, text_color);
-        draw_text(renderer_, std::to_string(rows), pile_x + pile_width - 16.0F, pile_y + pile_height + 12.0F, 2.8F, count_color);
+    void render_top_row(const spider::LayoutMetrics& layout)
+    {
+        const SDL_FRect stock_slot = top_row_slot_rect(layout, 0);
+        if (state().stock_rows_remaining() > 0) {
+            render_card_back_stack(stock_slot, static_cast<int>(state().stock_rows_remaining()));
+        } else {
+            draw_placeholder_slot(stock_slot, false);
+        }
+
+        const std::size_t completed_slots = std::min<std::size_t>(state().completed_runs(), 8);
+        for (std::size_t slot_index = 2; slot_index < 10; ++slot_index) {
+            const SDL_FRect slot = top_row_slot_rect(layout, slot_index);
+            const bool filled = (slot_index - 2) < completed_slots;
+            if (filled) {
+                render_card_back_stack(slot, 2);
+            } else {
+                draw_placeholder_slot(slot, false);
+            }
+        }
     }
 
     void render_stack(const spider::LayoutMetrics& layout, std::size_t stack_index)
@@ -854,7 +870,6 @@ private:
         const bool valid_drop = hovered && can_move_selection_to(stack_index);
         SDL_SetRenderDrawColor(renderer_, valid_drop ? 190 : (hovered ? 72 : 36), valid_drop ? 184 : (hovered ? 148 : 108), valid_drop ? 78 : (hovered ? 76 : 56), 255);
         SDL_RenderRect(renderer_, &slot);
-        draw_text(renderer_, std::to_string(static_cast<int>(stack_index + 1)), slot.x + 6.0F, slot.y - 18.0F, 2.0F, SDL_Color {216, 226, 213, 255});
 
         const auto& stack = state().tableau()[stack_index];
         const auto rects = card_rects_for_stack(layout, stack_index);
@@ -925,17 +940,49 @@ private:
         SDL_RenderClear(renderer_);
 
         SDL_SetRenderDrawColor(renderer_, 65, 66, 70, 255);
-        const SDL_FRect top_bar {0.0F, 0.0F, static_cast<float>(window_width), layout.playfield_top};
-        SDL_RenderFillRect(renderer_, &top_bar);
+        const SDL_FRect controls_bar {0.0F, 0.0F, static_cast<float>(window_width), layout.top_controls_bottom};
+        SDL_RenderFillRect(renderer_, &controls_bar);
 
         SDL_SetRenderDrawColor(renderer_, 88, 88, 92, 255);
-        const SDL_FRect top_bar_inner {layout.outer_margin * 0.45F, layout.outer_margin * 0.35F, static_cast<float>(window_width) - layout.outer_margin * 0.9F, layout.playfield_top - layout.outer_margin * 0.55F};
-        SDL_RenderRect(renderer_, &top_bar_inner);
+        const SDL_FRect controls_bar_inner {
+            layout.outer_margin * 0.45F,
+            layout.outer_margin * 0.35F,
+            static_cast<float>(window_width) - layout.outer_margin * 0.9F,
+            layout.top_controls_bottom - layout.outer_margin * 0.55F,
+        };
+        SDL_RenderRect(renderer_, &controls_bar_inner);
+
+        SDL_SetRenderDrawColor(renderer_, 44, 46, 52, 255);
+        const SDL_FRect top_row_band {
+            0.0F,
+            layout.top_controls_bottom,
+            static_cast<float>(window_width),
+            layout.playfield_top - layout.top_controls_bottom,
+        };
+        SDL_RenderFillRect(renderer_, &top_row_band);
+
+        SDL_SetRenderDrawColor(renderer_, 106, 108, 114, 255);
+        const SDL_FRect top_row_band_inner {
+            layout.outer_margin * 0.3F,
+            layout.top_controls_bottom + layout.top_row_gap * 0.35F,
+            static_cast<float>(window_width) - layout.outer_margin * 0.6F,
+            std::max(0.0F, layout.playfield_top - layout.top_controls_bottom - layout.top_row_gap * 0.7F),
+        };
+        SDL_RenderRect(renderer_, &top_row_band_inner);
+
+        SDL_SetRenderDrawColor(renderer_, 118, 120, 128, 255);
+        const SDL_FRect controls_divider {
+            0.0F,
+            layout.top_controls_bottom - 1.0F,
+            static_cast<float>(window_width),
+            1.0F,
+        };
+        SDL_RenderFillRect(renderer_, &controls_divider);
 
         for (const auto& button : buttons_) {
             draw_button(button, is_button_enabled(button.action));
         }
-        render_stock_pile(layout, window_width);
+        render_top_row(layout);
 
         const SDL_Rect clip_rect {
             0,
