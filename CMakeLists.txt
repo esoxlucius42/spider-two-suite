@@ -11,6 +11,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_library(spider_core
     src/core/game_state.cpp
+    src/core/game_session.cpp
     src/core/layout.cpp
 )
 

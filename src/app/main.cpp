@@ -1,4 +1,4 @@
-#include "spider/game_state.hpp"
+#include "spider/game_session.hpp"
 #include "spider/layout.hpp"
 
 #include <SDL3/SDL.h>
@@ -10,7 +10,6 @@
 #include <cmath>
 #include <cstdint>
 #include <optional>
-#include <random>
 #include <stdexcept>
 #include <string_view>
 #include <utility>
@@ -39,8 +38,23 @@ struct DragState {
 };
 
 struct Button {
+    enum class Action {
+        new_game,
+        restart,
+        undo,
+        redo,
+        confirm_yes,
+        confirm_no,
+    };
+
+    Action action {};
     std::string_view label;
     SDL_FRect bounds {};
+};
+
+enum class ConfirmationAction {
+    new_game,
+    restart,
 };
 
 constexpr std::array<int, 14> kAtlasX {0, 167, 334, 502, 669, 837, 1004, 1172, 1339, 1507, 1674, 1842, 2009, 2179};
@@ -169,7 +183,7 @@ void draw_text(SDL_Renderer* renderer, std::string_view text, float x, float y, 
 class App {
 public:
     App()
-        : state_(spider::GameState::create_new_game(kInitialSeed))
+        : session_(spider::GameSession::create_new_game(kInitialSeed))
     {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             throw std::runtime_error(SDL_GetError());
@@ -224,17 +238,24 @@ private:
     SDL_Window* window_ {nullptr};
     SDL_Renderer* renderer_ {nullptr};
     SDL_Texture* cards_texture_ {nullptr};
-    spider::GameState state_;
+    spider::GameSession session_;
     float scroll_offset_ {0.0F};
     std::optional<Selection> selection_;
     std::optional<Selection> pressed_selection_;
     std::optional<DragState> drag_state_;
     std::optional<std::size_t> hovered_stack_;
-    std::optional<std::size_t> hovered_button_;
+    std::optional<Button::Action> hovered_button_;
+    std::optional<ConfirmationAction> pending_confirmation_;
     float press_x_ {0.0F};
     float press_y_ {0.0F};
-    std::array<Button, 2> buttons_ {};
+    std::array<Button, 4> buttons_ {};
+    std::array<Button, 2> dialog_buttons_ {};
     bool running_ {true};
+
+    [[nodiscard]] auto state() const -> const spider::GameState&
+    {
+        return session_.state();
+    }
 
     auto current_window_size() const -> std::pair<int, int>
     {
@@ -250,42 +271,191 @@ private:
             return false;
         }
 
-        return state_.can_move_sequence(spider::Move {
+        return session_.can_move_sequence(spider::Move {
             .from_stack = selection_->stack_index,
             .start_index = selection_->start_index,
             .to_stack = destination_stack,
         });
     }
 
+    auto confirmation_panel_bounds(int window_width, int window_height) const -> SDL_FRect
+    {
+        const float panel_width = std::clamp(static_cast<float>(window_width) * 0.42F, 320.0F, 460.0F);
+        const float panel_height = 184.0F;
+        return SDL_FRect {
+            (static_cast<float>(window_width) - panel_width) * 0.5F,
+            (static_cast<float>(window_height) - panel_height) * 0.5F,
+            panel_width,
+            panel_height,
+        };
+    }
+
+    auto stock_pile_bounds(const spider::LayoutMetrics& layout, int window_width) const -> SDL_FRect
+    {
+        const float pile_width = layout.card_width * 0.58F;
+        const float pile_height = layout.card_height * 0.58F;
+        const float pile_x = static_cast<float>(window_width) - layout.outer_margin - pile_width - 8.0F;
+        const float pile_y = layout.outer_margin + 7.0F;
+        return SDL_FRect {
+            pile_x - 18.0F,
+            pile_y,
+            pile_width + 18.0F,
+            pile_height + 16.0F,
+        };
+    }
+
+    void layout_ui(const spider::LayoutMetrics& layout, int window_width, int window_height)
+    {
+        const float top_y = layout.outer_margin + 7.0F;
+        const float button_height = layout.top_controls_height - 20.0F;
+        const float button_gap = std::clamp(layout.outer_margin * 0.35F, 10.0F, 18.0F);
+        const float right_reserved = layout.card_width * 0.58F + 120.0F;
+        const float available_width = std::max(448.0F, static_cast<float>(window_width) - layout.outer_margin * 2.0F - right_reserved);
+        const float button_width = std::clamp((available_width - button_gap * 3.0F) / 4.0F, 104.0F, 156.0F);
+
+        buttons_[0] = Button {
+            .action = Button::Action::new_game,
+            .label = "NEW GAME",
+            .bounds = SDL_FRect {layout.outer_margin, top_y, button_width, button_height},
+        };
+        buttons_[1] = Button {
+            .action = Button::Action::restart,
+            .label = "RESTART",
+            .bounds = SDL_FRect {layout.outer_margin + (button_width + button_gap), top_y, button_width, button_height},
+        };
+        buttons_[2] = Button {
+            .action = Button::Action::undo,
+            .label = "UNDO",
+            .bounds = SDL_FRect {layout.outer_margin + (button_width + button_gap) * 2.0F, top_y, button_width, button_height},
+        };
+        buttons_[3] = Button {
+            .action = Button::Action::redo,
+            .label = "REDO",
+            .bounds = SDL_FRect {layout.outer_margin + (button_width + button_gap) * 3.0F, top_y, button_width, button_height},
+        };
+
+        const SDL_FRect panel = confirmation_panel_bounds(window_width, window_height);
+        const float dialog_button_width = (panel.w - 52.0F) * 0.5F;
+        const float dialog_button_y = panel.y + panel.h - 58.0F;
+        dialog_buttons_[0] = Button {
+            .action = Button::Action::confirm_yes,
+            .label = "YES",
+            .bounds = SDL_FRect {panel.x + 18.0F, dialog_button_y, dialog_button_width, 40.0F},
+        };
+        dialog_buttons_[1] = Button {
+            .action = Button::Action::confirm_no,
+            .label = "CANCEL",
+            .bounds = SDL_FRect {panel.x + panel.w - dialog_button_width - 18.0F, dialog_button_y, dialog_button_width, 40.0F},
+        };
+    }
+
+    [[nodiscard]] auto is_button_enabled(Button::Action action) const -> bool
+    {
+        switch (action) {
+        case Button::Action::new_game:
+        case Button::Action::restart:
+        case Button::Action::confirm_yes:
+        case Button::Action::confirm_no:
+            return true;
+        case Button::Action::undo:
+            return session_.can_undo();
+        case Button::Action::redo:
+            return session_.can_redo();
+        }
+
+        return false;
+    }
+
+    void clear_selection_state()
+    {
+        selection_.reset();
+        pressed_selection_.reset();
+        drag_state_.reset();
+        hovered_stack_.reset();
+    }
+
+    void reset_for_fresh_layout()
+    {
+        clear_selection_state();
+        scroll_offset_ = 0.0F;
+    }
+
+    void open_confirmation(ConfirmationAction action)
+    {
+        pending_confirmation_ = action;
+        clear_selection_state();
+    }
+
+    void cancel_confirmation()
+    {
+        pending_confirmation_.reset();
+    }
+
     void update_hover_state(float x, float y)
     {
+        const auto [window_width, window_height] = current_window_size();
+        const auto layout = layout_for_window(window_width, window_height);
+        layout_ui(layout, window_width, window_height);
+
         hovered_button_.reset();
-        for (std::size_t button_index = 0; button_index < buttons_.size(); ++button_index) {
-            if (point_in_rect(x, y, buttons_[button_index].bounds)) {
-                hovered_button_ = button_index;
-                break;
+        hovered_stack_.reset();
+
+        if (pending_confirmation_.has_value()) {
+            for (const auto& button : dialog_buttons_) {
+                if (point_in_rect(x, y, button.bounds)) {
+                    hovered_button_ = button.action;
+                    return;
+                }
+            }
+            return;
+        }
+
+        for (const auto& button : buttons_) {
+            if (point_in_rect(x, y, button.bounds)) {
+                hovered_button_ = button.action;
+                return;
             }
         }
 
-        const auto [window_width, window_height] = current_window_size();
-        const auto layout = layout_for_window(window_width, window_height);
         hovered_stack_ = hit_test_stack(x, y, layout);
     }
 
     void start_new_game()
     {
-        const std::uint64_t new_seed = kInitialSeed + state_.move_count() + state_.completed_runs() + 1;
-        state_ = spider::GameState::create_new_game(new_seed);
-        selection_.reset();
-        pressed_selection_.reset();
-        drag_state_.reset();
-        scroll_offset_ = 0.0F;
+        const auto& current = state();
+        const std::uint64_t new_seed = kInitialSeed + current.move_count() + current.completed_runs() + 1;
+        session_.start_new_game(new_seed);
+        cancel_confirmation();
+        reset_for_fresh_layout();
+    }
+
+    void restart_game()
+    {
+        session_.restart();
+        cancel_confirmation();
+        reset_for_fresh_layout();
+    }
+
+    void undo_action()
+    {
+        if (session_.undo()) {
+            clear_selection_state();
+            cancel_confirmation();
+        }
+    }
+
+    void redo_action()
+    {
+        if (session_.redo()) {
+            clear_selection_state();
+            cancel_confirmation();
+        }
     }
 
     void deal_stock()
     {
-        if (state_.deal_from_stock()) {
-            selection_.reset();
+        if (session_.deal_from_stock()) {
+            clear_selection_state();
         }
     }
 
@@ -293,7 +463,7 @@ private:
     {
         std::array<std::size_t, 10> counts {};
         for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
-            counts[stack_index] = state_.tableau()[stack_index].size();
+            counts[stack_index] = state().tableau()[stack_index].size();
         }
         return counts;
     }
@@ -302,7 +472,7 @@ private:
     {
         std::array<std::size_t, 10> counts {};
         for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
-            counts[stack_index] = state_.hidden_card_count(stack_index);
+            counts[stack_index] = state().hidden_card_count(stack_index);
         }
         return counts;
     }
@@ -315,7 +485,7 @@ private:
     auto card_rects_for_stack(const spider::LayoutMetrics& layout, std::size_t stack_index) const -> std::vector<SDL_FRect>
     {
         std::vector<SDL_FRect> rects;
-        const auto& stack = state_.tableau()[stack_index];
+        const auto& stack = state().tableau()[stack_index];
         rects.reserve(stack.size());
 
         float y = layout.playfield_top + 12.0F - layout.scroll_offset;
@@ -361,7 +531,7 @@ private:
                     continue;
                 }
 
-                if (state_.is_movable_sequence(stack_index, card_index)) {
+                if (state().is_movable_sequence(stack_index, card_index)) {
                     return Selection {.stack_index = stack_index, .start_index = card_index};
                 }
 
@@ -384,30 +554,73 @@ private:
             .to_stack = destination_stack,
         };
 
-        if (!state_.move_sequence(move)) {
+        if (!session_.move_sequence(move)) {
             return false;
         }
 
-        selection_.reset();
-        drag_state_.reset();
+        clear_selection_state();
         return true;
+    }
+
+    void handle_button_action(Button::Action action)
+    {
+        if (!is_button_enabled(action)) {
+            return;
+        }
+
+        switch (action) {
+        case Button::Action::new_game:
+            open_confirmation(ConfirmationAction::new_game);
+            return;
+        case Button::Action::restart:
+            open_confirmation(ConfirmationAction::restart);
+            return;
+        case Button::Action::undo:
+            undo_action();
+            return;
+        case Button::Action::redo:
+            redo_action();
+            return;
+        case Button::Action::confirm_yes:
+            if (pending_confirmation_ == ConfirmationAction::new_game) {
+                start_new_game();
+            } else if (pending_confirmation_ == ConfirmationAction::restart) {
+                restart_game();
+            }
+            return;
+        case Button::Action::confirm_no:
+            cancel_confirmation();
+            return;
+        }
     }
 
     void handle_click(float x, float y)
     {
+        const auto [window_width, window_height] = current_window_size();
+        const auto layout = layout_for_window(window_width, window_height);
+        layout_ui(layout, window_width, window_height);
+
+        if (pending_confirmation_.has_value()) {
+            for (const auto& button : dialog_buttons_) {
+                if (point_in_rect(x, y, button.bounds)) {
+                    handle_button_action(button.action);
+                    return;
+                }
+            }
+            return;
+        }
+
         for (const auto& button : buttons_) {
             if (point_in_rect(x, y, button.bounds)) {
-                if (button.label == "NEW") {
-                    start_new_game();
-                } else if (button.label == "DEAL") {
-                    deal_stock();
-                }
+                handle_button_action(button.action);
                 return;
             }
         }
 
-        const auto [window_width, window_height] = current_window_size();
-        const auto layout = layout_for_window(window_width, window_height);
+        if (point_in_rect(x, y, stock_pile_bounds(layout, window_width))) {
+            deal_stock();
+            return;
+        }
 
         if (const auto card = hit_test_card(x, y, layout); card.has_value()) {
             if (selection_.has_value() && selection_->stack_index == card->stack_index && selection_->start_index == card->start_index) {
@@ -430,6 +643,7 @@ private:
         }
 
         selection_.reset();
+        pressed_selection_.reset();
     }
 
     void start_drag(const Selection& selection, float x, float y)
@@ -474,6 +688,9 @@ private:
             running_ = false;
             return;
         case SDL_EVENT_MOUSE_WHEEL:
+            if (pending_confirmation_.has_value()) {
+                return;
+            }
             scroll_offset_ -= event.wheel.y * 64.0F;
             {
                 const auto [window_width, window_height] = current_window_size();
@@ -481,13 +698,18 @@ private:
             }
             return;
         case SDL_EVENT_KEY_DOWN:
+            if (pending_confirmation_.has_value()) {
+                if (event.key.key == SDLK_ESCAPE) {
+                    cancel_confirmation();
+                }
+                return;
+            }
             if (event.key.key == SDLK_ESCAPE) {
-                selection_.reset();
-                drag_state_.reset();
+                clear_selection_state();
                 return;
             }
             if (event.key.key == SDLK_N) {
-                start_new_game();
+                open_confirmation(ConfirmationAction::new_game);
                 return;
             }
             if (event.key.key == SDLK_D || event.key.key == SDLK_SPACE) {
@@ -497,6 +719,9 @@ private:
             return;
         case SDL_EVENT_MOUSE_BUTTON_DOWN:
             if (event.button.button != SDL_BUTTON_LEFT) {
+                return;
+            }
+            if (pending_confirmation_.has_value()) {
                 return;
             }
             press_x_ = event.button.x;
@@ -514,6 +739,9 @@ private:
             return;
         case SDL_EVENT_MOUSE_MOTION:
             update_hover_state(event.motion.x, event.motion.y);
+            if (pending_confirmation_.has_value()) {
+                return;
+            }
             if (drag_state_.has_value()) {
                 drag_state_->mouse_x = event.motion.x;
                 drag_state_->mouse_y = event.motion.y;
@@ -547,14 +775,14 @@ private:
 
     void draw_button(const Button& button, bool enabled)
     {
-        const bool hovered = hovered_button_.has_value() && buttons_[*hovered_button_].label == button.label;
+        const bool hovered = hovered_button_.has_value() && *hovered_button_ == button.action;
         SDL_SetRenderDrawColor(renderer_, enabled ? (hovered ? 68 : 54) : 35, enabled ? (hovered ? 109 : 94) : 55, enabled ? (hovered ? 134 : 120) : 63, 255);
         SDL_RenderFillRect(renderer_, &button.bounds);
 
         SDL_SetRenderDrawColor(renderer_, hovered ? 236 : 180, hovered ? 234 : 214, hovered ? 221 : 226, 255);
         SDL_RenderRect(renderer_, &button.bounds);
 
-        const float text_scale = std::max(2.5F, button.bounds.h / 12.0F);
+        const float text_scale = std::max(2.3F, button.bounds.h / 13.0F);
         const float text_width = static_cast<float>(button.label.size()) * 6.0F * text_scale - text_scale;
         const float text_x = button.bounds.x + (button.bounds.w - text_width) * 0.5F;
         const float text_y = button.bounds.y + (button.bounds.h - (7.0F * text_scale)) * 0.5F;
@@ -586,23 +814,9 @@ private:
         }
     }
 
-    void draw_stat_panel(float x, float y, float w, float h, std::string_view label, int value)
-    {
-        const SDL_FRect panel {x, y, w, h};
-        SDL_SetRenderDrawColor(renderer_, 58, 60, 64, 255);
-        SDL_RenderFillRect(renderer_, &panel);
-        SDL_SetRenderDrawColor(renderer_, 162, 170, 174, 255);
-        SDL_RenderRect(renderer_, &panel);
-
-        const float label_scale = std::max(2.1F, h / 22.0F);
-        const float value_scale = std::max(2.8F, h / 15.0F);
-        draw_text(renderer_, label, x + 10.0F, y + 8.0F, label_scale, SDL_Color {210, 214, 216, 255});
-        draw_text(renderer_, std::to_string(value), x + 10.0F, y + h * 0.48F, value_scale, SDL_Color {248, 248, 244, 255});
-    }
-
     void render_stock_pile(const spider::LayoutMetrics& layout, int window_width)
     {
-        const int rows = static_cast<int>(state_.stock_rows_remaining());
+        const int rows = static_cast<int>(state().stock_rows_remaining());
         const float pile_width = layout.card_width * 0.58F;
         const float pile_height = layout.card_height * 0.58F;
         const float pile_x = static_cast<float>(window_width) - layout.outer_margin - pile_width - 8.0F;
@@ -621,8 +835,10 @@ private:
             SDL_RenderTexture(renderer_, cards_texture_, &source, &destination);
         }
 
-        draw_text(renderer_, "STOCK", pile_x - 8.0F, pile_y + pile_height + 12.0F, 2.4F, SDL_Color {234, 236, 233, 255});
-        draw_text(renderer_, std::to_string(rows), pile_x + pile_width - 16.0F, pile_y + pile_height + 12.0F, 2.8F, SDL_Color {250, 245, 214, 255});
+        const SDL_Color text_color = state().can_deal_from_stock() ? SDL_Color {234, 236, 233, 255} : SDL_Color {150, 160, 160, 255};
+        const SDL_Color count_color = state().can_deal_from_stock() ? SDL_Color {250, 245, 214, 255} : SDL_Color {150, 160, 160, 255};
+        draw_text(renderer_, "STOCK", pile_x - 8.0F, pile_y + pile_height + 12.0F, 2.4F, text_color);
+        draw_text(renderer_, std::to_string(rows), pile_x + pile_width - 16.0F, pile_y + pile_height + 12.0F, 2.8F, count_color);
     }
 
     void render_stack(const spider::LayoutMetrics& layout, std::size_t stack_index)
@@ -640,7 +856,7 @@ private:
         SDL_RenderRect(renderer_, &slot);
         draw_text(renderer_, std::to_string(static_cast<int>(stack_index + 1)), slot.x + 6.0F, slot.y - 18.0F, 2.0F, SDL_Color {216, 226, 213, 255});
 
-        const auto& stack = state_.tableau()[stack_index];
+        const auto& stack = state().tableau()[stack_index];
         const auto rects = card_rects_for_stack(layout, stack_index);
 
         for (std::size_t card_index = 0; card_index < stack.size(); ++card_index) {
@@ -664,7 +880,7 @@ private:
         }
 
         const auto& selection = drag_state_->selection;
-        const auto& stack = state_.tableau()[selection.stack_index];
+        const auto& stack = state().tableau()[selection.stack_index];
         float y = drag_state_->mouse_y - drag_state_->grab_offset_y;
         const float x = drag_state_->mouse_x - drag_state_->grab_offset_x;
 
@@ -675,20 +891,35 @@ private:
         }
     }
 
+    void render_confirmation_dialog(int window_width, int window_height)
+    {
+        if (!pending_confirmation_.has_value()) {
+            return;
+        }
+
+        const SDL_FRect panel = confirmation_panel_bounds(window_width, window_height);
+        SDL_SetRenderDrawColor(renderer_, 34, 36, 40, 255);
+        SDL_RenderFillRect(renderer_, &panel);
+        SDL_SetRenderDrawColor(renderer_, 184, 189, 192, 255);
+        SDL_RenderRect(renderer_, &panel);
+
+        const char* title = pending_confirmation_ == ConfirmationAction::new_game ? "NEW GAME" : "RESTART";
+        const char* message = pending_confirmation_ == ConfirmationAction::new_game ? "START A NEW DEAL" : "RESET DEAL TO START";
+        draw_text(renderer_, title, panel.x + 22.0F, panel.y + 18.0F, 3.2F, SDL_Color {240, 243, 244, 255});
+        draw_text(renderer_, message, panel.x + 22.0F, panel.y + 66.0F, 2.3F, SDL_Color {231, 236, 238, 255});
+        draw_text(renderer_, "LOSE GAME DATA", panel.x + 22.0F, panel.y + 100.0F, 2.2F, SDL_Color {223, 202, 146, 255});
+
+        for (const auto& button : dialog_buttons_) {
+            draw_button(button, true);
+        }
+    }
+
     void render()
     {
         const auto [window_width, window_height] = current_window_size();
         const auto layout = layout_for_window(window_width, window_height);
+        layout_ui(layout, window_width, window_height);
         scroll_offset_ = layout.scroll_offset;
-
-        buttons_[0] = Button {
-            .label = "NEW",
-            .bounds = SDL_FRect {layout.outer_margin, layout.outer_margin + 7.0F, 120.0F, layout.top_controls_height - 20.0F},
-        };
-        buttons_[1] = Button {
-            .label = "DEAL",
-            .bounds = SDL_FRect {layout.outer_margin + 136.0F, layout.outer_margin + 7.0F, 120.0F, layout.top_controls_height - 20.0F},
-        };
 
         SDL_SetRenderDrawColor(renderer_, 2, 69, 27, 255);
         SDL_RenderClear(renderer_);
@@ -701,10 +932,9 @@ private:
         const SDL_FRect top_bar_inner {layout.outer_margin * 0.45F, layout.outer_margin * 0.35F, static_cast<float>(window_width) - layout.outer_margin * 0.9F, layout.playfield_top - layout.outer_margin * 0.55F};
         SDL_RenderRect(renderer_, &top_bar_inner);
 
-        draw_button(buttons_[0], true);
-        draw_button(buttons_[1], state_.can_deal_from_stock());
-        draw_stat_panel(layout.outer_margin + 286.0F, layout.outer_margin + 7.0F, 118.0F, layout.top_controls_height - 20.0F, "MOVES", static_cast<int>(state_.move_count()));
-        draw_stat_panel(layout.outer_margin + 420.0F, layout.outer_margin + 7.0F, 118.0F, layout.top_controls_height - 20.0F, "RUNS", static_cast<int>(state_.completed_runs()));
+        for (const auto& button : buttons_) {
+            draw_button(button, is_button_enabled(button.action));
+        }
         render_stock_pile(layout, window_width);
 
         const SDL_Rect clip_rect {
@@ -740,6 +970,7 @@ private:
         render_drag_stack(layout);
 
         SDL_SetRenderClipRect(renderer_, nullptr);
+        render_confirmation_dialog(window_width, window_height);
         SDL_RenderPresent(renderer_);
     }
 };
