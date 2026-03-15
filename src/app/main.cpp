@@ -726,6 +726,10 @@ private:
                 open_confirmation(ConfirmationAction::new_game);
                 return;
             }
+            if (event.key.key == SDLK_F) {
+                undo_action();
+                return;
+            }
             if (event.key.key == SDLK_D || event.key.key == SDLK_SPACE) {
                 deal_stock();
                 return;

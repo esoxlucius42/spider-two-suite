@@ -65,6 +65,7 @@ inline constexpr int SDL_EVENT_MOUSE_MOTION = 0x203;
 inline constexpr int SDL_EVENT_MOUSE_BUTTON_UP = 0x204;
 inline constexpr unsigned char SDL_BUTTON_LEFT = 1;
 inline constexpr int SDLK_ESCAPE = 27;
+inline constexpr int SDLK_F = 'f';
 inline constexpr int SDLK_SPACE = 32;
 inline constexpr int SDLK_D = 'd';
 inline constexpr int SDLK_N = 'n';
