@@ -150,7 +150,9 @@ int main()
         expect_near(tight.top_row_bottom - tight.top_row_y, tight.card_height, 0.01F, "tight top row should reuse the card height");
         expect_near(roomy.playfield_top - roomy.top_row_bottom, roomy.top_row_gap, 0.01F, "roomy layout should reserve the configured gap below the top row");
         expect_near(tight.playfield_top - tight.top_row_bottom, tight.top_row_gap, 0.01F, "tight layout should reserve the configured gap below the top row");
-        expect(tight.face_up_step <= roomy.face_up_step, "face-up spacing should compress for tighter layouts");
+        expect_near(roomy.stack_vertical_offset, roomy.card_height / 6.0F, 0.01F, "roomy layout should derive stack spacing from card height");
+        expect_near(tight.stack_vertical_offset, tight.card_height / 6.0F, 0.01F, "tight layout should derive stack spacing from card height");
+        expect(tight.stack_vertical_offset < roomy.stack_vertical_offset, "stack spacing should recompute when resize changes card size");
         expect(tight.scroll_offset >= 0.0F, "scroll offset should remain non-negative");
         expect(tight.content_height >= tight.playfield_height, "tall layouts should produce scrollable content");
     }

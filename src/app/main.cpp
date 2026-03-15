@@ -488,7 +488,7 @@ private:
         float y = layout.playfield_top + 12.0F - layout.scroll_offset;
         for (const auto& card : stack) {
             rects.push_back(SDL_FRect {layout.stack_x[stack_index], y, layout.card_width, layout.card_height});
-            y += card.face_up ? layout.face_up_step : layout.face_down_step;
+            y += layout.stack_vertical_offset;
         }
 
         return rects;
@@ -903,7 +903,7 @@ private:
         for (std::size_t index = selection.start_index; index < stack.size(); ++index) {
             const SDL_FRect destination {x, y, layout.card_width, layout.card_height};
             render_card_sprite(destination, stack[index], index == selection.start_index);
-            y += layout.face_up_step;
+            y += layout.stack_vertical_offset;
         }
     }
 

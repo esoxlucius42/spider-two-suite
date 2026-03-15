@@ -17,8 +17,7 @@ struct LayoutMetrics {
     float card_width {};
     float card_height {};
     float stack_gap {};
-    float face_down_step {};
-    float face_up_step {};
+    float stack_vertical_offset {};
     float stack_slot_height {};
     float content_height {};
     float scroll_offset {};
