@@ -13,6 +13,7 @@ add_library(spider_core
     src/core/game_state.cpp
     src/core/game_session.cpp
     src/core/layout.cpp
+    src/core/persistence.cpp
 )
 
 target_include_directories(spider_core
@@ -57,6 +58,9 @@ if(SPIDER_BUILD_TESTS)
     target_link_libraries(spider_core_tests PRIVATE spider_core)
 
     add_test(NAME spider_core_tests COMMAND spider_core_tests)
+    set_tests_properties(spider_core_tests PROPERTIES
+        ENVIRONMENT "SPIDER_LAST_SESSION_PATH=${CMAKE_CURRENT_BINARY_DIR}/spider_core_test_save.txt"
+    )
 
     add_executable(spider_app_smoke_test
         src/app/main.cpp
@@ -75,4 +79,7 @@ if(SPIDER_BUILD_TESTS)
     )
 
     add_test(NAME spider_app_smoke_test COMMAND spider_app_smoke_test)
+    set_tests_properties(spider_app_smoke_test PROPERTIES
+        ENVIRONMENT "SPIDER_LAST_SESSION_PATH=${CMAKE_CURRENT_BINARY_DIR}/spider_app_smoke_save.txt"
+    )
 endif()

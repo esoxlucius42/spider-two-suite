@@ -9,9 +9,31 @@ auto GameSession::create_new_game(std::uint64_t seed) -> GameSession
     return session;
 }
 
+auto GameSession::create_restored_session(
+    GameState state,
+    std::vector<GameState> undo_history,
+    std::vector<GameState> redo_history) -> GameSession
+{
+    GameSession session;
+    session.state_ = std::move(state);
+    session.undo_history_ = std::move(undo_history);
+    session.redo_history_ = std::move(redo_history);
+    return session;
+}
+
 auto GameSession::state() const -> const GameState&
 {
     return state_;
+}
+
+auto GameSession::undo_history() const -> const std::vector<GameState>&
+{
+    return undo_history_;
+}
+
+auto GameSession::redo_history() const -> const std::vector<GameState>&
+{
+    return redo_history_;
 }
 
 auto GameSession::can_move_sequence(const Move& move) const -> bool

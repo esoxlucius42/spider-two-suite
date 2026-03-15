@@ -1,6 +1,7 @@
 #include "spider/card_sprite.hpp"
 #include "spider/game_session.hpp"
 #include "spider/layout.hpp"
+#include "spider/persistence.hpp"
 
 #include <SDL3/SDL.h>
 #include <SDL3_image/SDL_image.h>
@@ -61,6 +62,11 @@ enum class ConfirmationAction {
 constexpr std::array<int, 14> kAtlasX {0, 167, 334, 502, 669, 837, 1004, 1172, 1339, 1507, 1674, 1842, 2009, 2179};
 constexpr std::array<int, 6> kAtlasY {0, 243, 487, 730, 972, 1216};
 constexpr std::uint64_t kInitialSeed = 20260315ULL;
+
+auto create_startup_session() -> spider::GameSession
+{
+    return spider::resume_or_create_session(kInitialSeed);
+}
 
 auto atlas_cell(int row, int column) -> AtlasCell
 {
@@ -184,7 +190,7 @@ void draw_text(SDL_Renderer* renderer, std::string_view text, float x, float y, 
 class App {
 public:
     App()
-        : session_(spider::GameSession::create_new_game(kInitialSeed))
+        : session_(create_startup_session())
     {
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             throw std::runtime_error(SDL_GetError());
@@ -371,6 +377,11 @@ private:
         hovered_stack_.reset();
     }
 
+    void persist_session() const
+    {
+        spider::save_last_session(session_);
+    }
+
     void reset_for_fresh_layout()
     {
         clear_selection_state();
@@ -422,6 +433,7 @@ private:
         const auto& current = state();
         const std::uint64_t new_seed = kInitialSeed + current.move_count() + current.completed_runs() + 1;
         session_.start_new_game(new_seed);
+        persist_session();
         cancel_confirmation();
         reset_for_fresh_layout();
     }
@@ -429,6 +441,7 @@ private:
     void restart_game()
     {
         session_.restart();
+        persist_session();
         cancel_confirmation();
         reset_for_fresh_layout();
     }
@@ -436,6 +449,7 @@ private:
     void undo_action()
     {
         if (session_.undo()) {
+            persist_session();
             clear_selection_state();
             cancel_confirmation();
         }
@@ -444,6 +458,7 @@ private:
     void redo_action()
     {
         if (session_.redo()) {
+            persist_session();
             clear_selection_state();
             cancel_confirmation();
         }
@@ -452,6 +467,7 @@ private:
     void deal_stock()
     {
         if (session_.deal_from_stock()) {
+            persist_session();
             clear_selection_state();
         }
     }
@@ -555,6 +571,7 @@ private:
             return false;
         }
 
+        persist_session();
         clear_selection_state();
         return true;
     }
@@ -846,7 +863,7 @@ private:
             draw_placeholder_slot(stock_slot, false);
         }
 
-        const std::size_t completed_slots = std::min<std::size_t>(state().completed_runs(), 8);
+        const std::size_t completed_slots = std::min<std::size_t>(state().completed_runs(), spider::GameState::kWinningCompletedRuns);
         for (std::size_t slot_index = 2; slot_index < 10; ++slot_index) {
             const SDL_FRect slot = top_row_slot_rect(layout, slot_index);
             const bool filled = (slot_index - 2) < completed_slots;

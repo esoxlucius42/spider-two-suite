@@ -118,6 +118,22 @@ auto GameState::create_new_game(std::uint64_t seed) -> GameState
     return state;
 }
 
+auto GameState::create_restored_game(
+    std::array<std::vector<Card>, kTableauStacks> tableau,
+    std::vector<std::array<Card, kStockRowSize>> stock_rows,
+    std::size_t completed_runs,
+    std::size_t move_count,
+    std::uint64_t seed) -> GameState
+{
+    GameState state;
+    state.tableau_ = std::move(tableau);
+    state.stock_rows_ = std::move(stock_rows);
+    state.completed_runs_ = completed_runs;
+    state.move_count_ = move_count;
+    state.seed_ = seed;
+    return state;
+}
+
 auto GameState::tableau() const -> const std::array<std::vector<Card>, kTableauStacks>&
 {
     return tableau_;
@@ -126,6 +142,11 @@ auto GameState::tableau() const -> const std::array<std::vector<Card>, kTableauS
 auto GameState::tableau() -> std::array<std::vector<Card>, kTableauStacks>&
 {
     return tableau_;
+}
+
+auto GameState::stock_rows() const -> const std::vector<std::array<Card, kStockRowSize>>&
+{
+    return stock_rows_;
 }
 
 auto GameState::stock_rows_remaining() const -> std::size_t
@@ -146,6 +167,11 @@ auto GameState::move_count() const -> std::size_t
 auto GameState::seed() const -> std::uint64_t
 {
     return seed_;
+}
+
+auto GameState::has_won() const -> bool
+{
+    return completed_runs_ == kWinningCompletedRuns;
 }
 
 auto GameState::is_movable_sequence(std::size_t stack_index, std::size_t start_index) const -> bool

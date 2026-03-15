@@ -2,9 +2,12 @@
 #include "spider/game_state.hpp"
 #include "spider/game_session.hpp"
 #include "spider/layout.hpp"
+#include "spider/persistence.hpp"
 
 #include <array>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <cstdlib>
 #include <iostream>
 
@@ -41,6 +44,40 @@ void expect_same_state(const spider::GameState& left, const spider::GameState& r
             expect(same_card(left_stack[card_index], right_stack[card_index]), message);
         }
     }
+
+    expect(left.stock_rows().size() == right.stock_rows().size(), message);
+    for (std::size_t row_index = 0; row_index < left.stock_rows().size(); ++row_index) {
+        for (std::size_t card_index = 0; card_index < spider::GameState::kStockRowSize; ++card_index) {
+            expect(same_card(left.stock_rows()[row_index][card_index], right.stock_rows()[row_index][card_index]), message);
+        }
+    }
+}
+
+void expect_same_session(const spider::GameSession& left, const spider::GameSession& right, const char* message)
+{
+    expect_same_state(left.state(), right.state(), message);
+    expect(left.undo_history().size() == right.undo_history().size(), message);
+    expect(left.redo_history().size() == right.redo_history().size(), message);
+
+    for (std::size_t index = 0; index < left.undo_history().size(); ++index) {
+        expect_same_state(left.undo_history()[index], right.undo_history()[index], message);
+    }
+
+    for (std::size_t index = 0; index < left.redo_history().size(); ++index) {
+        expect_same_state(left.redo_history()[index], right.redo_history()[index], message);
+    }
+}
+
+auto test_save_path(const char* name) -> std::filesystem::path
+{
+    return std::filesystem::temp_directory_path() / "spider-two-suite-tests" / name;
+}
+
+void reset_test_save(const std::filesystem::path& path)
+{
+    std::error_code ignored;
+    std::filesystem::create_directories(path.parent_path(), ignored);
+    std::filesystem::remove(path, ignored);
 }
 
 void expect_near(float left, float right, float epsilon, const char* message)
@@ -184,6 +221,51 @@ int main()
         expect_same_state(session.state(), initial, "restart should restore the current seed's initial deal");
         expect(!session.can_undo(), "restart should clear undo history");
         expect(!session.can_redo(), "restart should clear redo history");
+    }
+
+    {
+        const auto save_path = test_save_path("round-trip-session.txt");
+        reset_test_save(save_path);
+
+        spider::GameSession session = spider::GameSession::create_new_game(55);
+        expect(session.deal_from_stock(), "first stock deal should succeed for persistence");
+        expect(session.deal_from_stock(), "second stock deal should succeed for persistence");
+        expect(session.undo(), "undo should succeed before persistence round trip");
+
+        spider::save_last_session(save_path, session);
+        const auto load_result = spider::load_last_session(save_path);
+        expect(load_result.status == spider::LoadLastSessionStatus::loaded, "saved session should load successfully");
+        expect(load_result.session.has_value(), "saved session should contain a restored session");
+        expect_same_session(*load_result.session, session, "loaded session should match the saved session");
+
+        spider::clear_last_session(save_path);
+    }
+
+    {
+        const auto save_path = test_save_path("completed-session.txt");
+        reset_test_save(save_path);
+
+        spider::GameState finished = spider::GameState::create_restored_game({}, {}, spider::GameState::kWinningCompletedRuns, 88, 1234);
+        spider::save_last_session(save_path, spider::GameSession::create_restored_session(finished, {}, {}));
+
+        spider::GameSession resumed = spider::resume_or_create_session(save_path, 9999);
+        expect(resumed.state().seed() == 9999, "completed saved games should start a fresh deal");
+        expect(!resumed.state().has_won(), "fresh deal should not start in a won state");
+        expect(spider::load_last_session(save_path).status == spider::LoadLastSessionStatus::not_found, "completed save should be cleared after restart fallback");
+    }
+
+    {
+        const auto save_path = test_save_path("invalid-session.txt");
+        reset_test_save(save_path);
+
+        std::ofstream output(save_path, std::ios::trunc);
+        expect(static_cast<bool>(output), "test should be able to write an invalid save file");
+        output << "not a valid spider save";
+        output.close();
+
+        spider::GameSession resumed = spider::resume_or_create_session(save_path, 4321);
+        expect(resumed.state().seed() == 4321, "invalid saves should fall back to a fresh deal");
+        expect(spider::load_last_session(save_path).status == spider::LoadLastSessionStatus::not_found, "invalid save should be cleared after fallback");
     }
 
     return 0;

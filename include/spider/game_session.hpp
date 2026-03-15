@@ -10,8 +10,14 @@ namespace spider {
 class GameSession {
 public:
     [[nodiscard]] static auto create_new_game(std::uint64_t seed) -> GameSession;
+    [[nodiscard]] static auto create_restored_session(
+        GameState state,
+        std::vector<GameState> undo_history,
+        std::vector<GameState> redo_history) -> GameSession;
 
     [[nodiscard]] auto state() const -> const GameState&;
+    [[nodiscard]] auto undo_history() const -> const std::vector<GameState>&;
+    [[nodiscard]] auto redo_history() const -> const std::vector<GameState>&;
 
     [[nodiscard]] auto can_move_sequence(const Move& move) const -> bool;
     [[nodiscard]] auto move_sequence(const Move& move) -> bool;
