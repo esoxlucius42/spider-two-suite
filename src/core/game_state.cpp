@@ -83,6 +83,20 @@ auto is_completed_run(const std::vector<Card>& stack) -> bool
     return true;
 }
 
+auto canonical_completed_run_suits(std::size_t completed_runs) -> std::vector<Suit>
+{
+    std::vector<Suit> suits;
+    suits.reserve(completed_runs);
+
+    for (Suit suit : kPlayableSuits) {
+        for (std::size_t copy = 0; copy < 4 && suits.size() < completed_runs; ++copy) {
+            suits.push_back(suit);
+        }
+    }
+
+    return suits;
+}
+
 } // namespace
 
 auto GameState::create_new_game(std::uint64_t seed) -> GameState
@@ -145,12 +159,15 @@ auto GameState::create_restored_game(
     std::vector<std::array<Card, kStockRowSize>> stock_rows,
     std::size_t completed_runs,
     std::size_t move_count,
-    std::uint64_t seed) -> GameState
+    std::uint64_t seed,
+    std::vector<Suit> completed_run_suits) -> GameState
 {
     GameState state;
     state.tableau_ = std::move(tableau);
     state.stock_rows_ = std::move(stock_rows);
-    state.completed_runs_ = completed_runs;
+    state.completed_run_suits_ = completed_run_suits.empty() && completed_runs > 0
+        ? canonical_completed_run_suits(completed_runs)
+        : std::move(completed_run_suits);
     state.move_count_ = move_count;
     state.seed_ = seed;
     return state;
@@ -178,7 +195,12 @@ auto GameState::stock_rows_remaining() const -> std::size_t
 
 auto GameState::completed_runs() const -> std::size_t
 {
-    return completed_runs_;
+    return completed_run_suits_.size();
+}
+
+auto GameState::completed_run_suits() const -> const std::vector<Suit>&
+{
+    return completed_run_suits_;
 }
 
 auto GameState::move_count() const -> std::size_t
@@ -193,7 +215,7 @@ auto GameState::seed() const -> std::uint64_t
 
 auto GameState::has_won() const -> bool
 {
-    return completed_runs_ == kWinningCompletedRuns;
+    return completed_runs() == kWinningCompletedRuns;
 }
 
 auto GameState::is_movable_sequence(std::size_t stack_index, std::size_t start_index) const -> bool
@@ -223,6 +245,12 @@ auto GameState::can_move_sequence(const Move& move) const -> bool
 
 auto GameState::move_sequence(const Move& move) -> bool
 {
+    std::vector<CompletedRunEvent> completed_runs;
+    return move_sequence(move, completed_runs);
+}
+
+auto GameState::move_sequence(const Move& move, std::vector<CompletedRunEvent>& completed_runs) -> bool
+{
     if (!can_move_sequence(move)) {
         return false;
     }
@@ -235,8 +263,8 @@ auto GameState::move_sequence(const Move& move) -> bool
     from.erase(split, from.end());
 
     reveal_top_card(move.from_stack);
-    clear_completed_runs(move.to_stack);
-    clear_completed_runs(move.from_stack);
+    clear_completed_runs(move.to_stack, &completed_runs);
+    clear_completed_runs(move.from_stack, &completed_runs);
     ++move_count_;
 
     return true;
@@ -288,6 +316,12 @@ auto GameState::can_deal_from_stock() const -> bool
 
 auto GameState::deal_from_stock() -> bool
 {
+    std::vector<CompletedRunEvent> completed_runs;
+    return deal_from_stock(completed_runs);
+}
+
+auto GameState::deal_from_stock(std::vector<CompletedRunEvent>& completed_runs) -> bool
+{
     if (!can_deal_from_stock()) {
         return false;
     }
@@ -297,7 +331,7 @@ auto GameState::deal_from_stock() -> bool
 
     for (std::size_t stack_index = 0; stack_index < kTableauStacks; ++stack_index) {
         tableau_[stack_index].push_back(stock_row[stack_index]);
-        clear_completed_runs(stack_index);
+        clear_completed_runs(stack_index, &completed_runs);
     }
 
     ++move_count_;
@@ -343,13 +377,25 @@ void GameState::reveal_top_card(std::size_t stack_index)
     }
 }
 
-void GameState::clear_completed_runs(std::size_t stack_index)
+void GameState::clear_completed_runs(std::size_t stack_index, std::vector<CompletedRunEvent>* completed_runs)
 {
     auto& stack = tableau_[stack_index];
 
     while (is_completed_run(stack)) {
+        const std::size_t start_index = stack.size() - kCompletedRunLength;
+        const Suit suit = stack[start_index].suit;
+
+        if (completed_runs != nullptr) {
+            CompletedRunEvent event {
+                .stack_index = stack_index,
+                .start_index = start_index,
+            };
+            std::copy_n(stack.begin() + static_cast<std::ptrdiff_t>(start_index), kCompletedRunLength, event.cards.begin());
+            completed_runs->push_back(event);
+        }
+
         stack.erase(stack.end() - static_cast<std::ptrdiff_t>(kCompletedRunLength), stack.end());
-        ++completed_runs_;
+        completed_run_suits_.push_back(suit);
         reveal_top_card(stack_index);
     }
 }

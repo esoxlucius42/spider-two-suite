@@ -35,6 +35,7 @@ void expect_same_state(const spider::GameState& left, const spider::GameState& r
 {
     expect(left.stock_rows_remaining() == right.stock_rows_remaining(), message);
     expect(left.completed_runs() == right.completed_runs(), message);
+    expect(left.completed_run_suits() == right.completed_run_suits(), message);
     expect(left.move_count() == right.move_count(), message);
     expect(left.seed() == right.seed(), message);
 
@@ -287,9 +288,56 @@ int main()
             {.suit = spider::Suit::spades, .rank = spider::Rank::ace, .face_up = true},
         };
 
-        expect(state.move_sequence(Move {.from_stack = 1, .start_index = 0, .to_stack = 0}), "ace should complete a same-suit run");
+        std::vector<spider::CompletedRunEvent> completed_runs;
+        expect(state.move_sequence(Move {.from_stack = 1, .start_index = 0, .to_stack = 0}, completed_runs), "ace should complete a same-suit run");
         expect(stacks[0].empty(), "completed run should be removed from the tableau");
         expect(state.completed_runs() == 1, "completed run should be counted");
+        expect(state.completed_run_suits().size() == 1 && state.completed_run_suits()[0] == spider::Suit::spades, "completed run should preserve its suit");
+        expect(completed_runs.size() == 1, "completed move should report one completed run event");
+        expect(completed_runs[0].stack_index == 0, "completed run event should point at the destination stack");
+        expect(completed_runs[0].start_index == 0, "completed run event should record the top run start");
+        expect(completed_runs[0].cards[0].rank == spider::Rank::king, "completed run event should keep king at the front");
+        expect(completed_runs[0].cards[12].rank == spider::Rank::ace, "completed run event should keep ace at the tail");
+    }
+
+    {
+        std::array<std::vector<spider::Card>, GameState::kTableauStacks> tableau {};
+        tableau[0] = {
+            {.suit = spider::Suit::spades, .rank = spider::Rank::king, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::queen, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::jack, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::ten, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::nine, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::eight, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::seven, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::six, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::five, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::four, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::three, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::two, .face_up = true},
+        };
+
+        std::vector<std::array<spider::Card, GameState::kStockRowSize>> stock_rows {
+            std::array<spider::Card, GameState::kStockRowSize> {{
+                {.suit = spider::Suit::spades, .rank = spider::Rank::ace, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::king, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::queen, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::jack, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::ten, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::nine, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::eight, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::seven, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::six, .face_up = true},
+                {.suit = spider::Suit::hearts, .rank = spider::Rank::five, .face_up = true},
+            }},
+        };
+        GameState state = GameState::create_restored_game(std::move(tableau), std::move(stock_rows), 0, 0, 11);
+
+        std::vector<spider::CompletedRunEvent> completed_runs;
+        expect(state.deal_from_stock(completed_runs), "stock deal should report completed runs");
+        expect(completed_runs.size() == 1, "stock deal should emit one completed run when a dealt ace closes the stack");
+        expect(completed_runs[0].stack_index == 0, "stock completion should point at the completed stack");
+        expect(state.completed_run_suits().size() == 1 && state.completed_run_suits()[0] == spider::Suit::spades, "stock completion should preserve suit metadata");
     }
 
     {
@@ -383,6 +431,36 @@ int main()
     }
 
     {
+        const auto save_path = test_save_path("completed-run-round-trip.txt");
+        reset_test_save(save_path);
+
+        std::array<std::vector<spider::Card>, GameState::kTableauStacks> tableau {};
+        GameState state = GameState::create_restored_game(
+            std::move(tableau),
+            {},
+            GameState::kWinningCompletedRuns,
+            19,
+            2468,
+            {
+                spider::Suit::spades,
+                spider::Suit::spades,
+                spider::Suit::spades,
+                spider::Suit::spades,
+                spider::Suit::hearts,
+                spider::Suit::hearts,
+                spider::Suit::hearts,
+                spider::Suit::hearts,
+            });
+        spider::GameSession session = spider::GameSession::create_restored_session(state, {}, {});
+
+        spider::save_last_session(save_path, session);
+        const auto load_result = spider::load_last_session(save_path);
+        expect(load_result.status == spider::LoadLastSessionStatus::loaded, "completed-run session should load successfully");
+        expect(load_result.session.has_value(), "completed-run session should restore a session");
+        expect_same_session(*load_result.session, session, "completed-run suit metadata should survive a persistence round trip");
+    }
+
+    {
         const auto save_path = test_save_path("invalid-session.txt");
         reset_test_save(save_path);
 
@@ -407,9 +485,9 @@ int main()
         expect(static_cast<bool>(input), "test should be able to read a saved session");
         std::string save_text((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
         input.close();
-        expect(save_text.rfind("SPIDER_SESSION_V2\n", 0) == 0, "saved sessions should use the current persistence header");
+        expect(save_text.rfind("SPIDER_SESSION_V3\n", 0) == 0, "saved sessions should use the current persistence header");
 
-        save_text.replace(0, std::string("SPIDER_SESSION_V2").size(), "SPIDER_SESSION_V1");
+        save_text.replace(0, std::string("SPIDER_SESSION_V3").size(), "SPIDER_SESSION_V1");
 
         std::ofstream output(save_path, std::ios::trunc);
         expect(static_cast<bool>(output), "test should be able to overwrite a saved session");

@@ -72,7 +72,18 @@ struct AutoMoveAnimation {
     spider::GameSession pending_session {};
     spider::Move move {};
     std::vector<spider::Card> cards {};
+    std::vector<spider::CompletedRunEvent> completed_runs {};
     std::size_t destination_card_index {};
+    float elapsed_seconds {0.0F};
+};
+
+struct CompletedRunFlight {
+    spider::CompletedRunEvent run {};
+    std::size_t target_pile_index {};
+};
+
+struct CompletedRunAnimation {
+    std::vector<CompletedRunFlight> flights {};
     float elapsed_seconds {0.0F};
 };
 
@@ -84,6 +95,9 @@ constexpr float kOpeningDealCardFlightSeconds = 0.28F;
 constexpr float kOpeningDealArcHeight = 28.0F;
 constexpr float kAutoMoveFlightSeconds = 0.22F;
 constexpr float kAutoMoveArcHeight = 20.0F;
+constexpr float kCompletedRunCardStaggerSeconds = 0.04F;
+constexpr float kCompletedRunFlightSeconds = 0.34F;
+constexpr float kCompletedRunArcHeight = 26.0F;
 constexpr int kOpeningDeckCardsPerLayer = 10;
 constexpr int kMaximumDeckLayers = 8;
 
@@ -128,6 +142,19 @@ auto smoothstep(float progress) -> float
 {
     const float clamped = std::clamp(progress, 0.0F, 1.0F);
     return clamped * clamped * (3.0F - 2.0F * clamped);
+}
+
+auto completed_pile_cards(spider::Suit suit) -> std::array<spider::Card, spider::GameState::kCompletedRunLength>
+{
+    std::array<spider::Card, spider::GameState::kCompletedRunLength> cards {};
+    for (std::size_t index = 0; index < cards.size(); ++index) {
+        cards[index] = spider::Card {
+            .suit = suit,
+            .rank = static_cast<spider::Rank>(static_cast<int>(spider::Rank::ace) + static_cast<int>(index)),
+            .face_up = true,
+        };
+    }
+    return cards;
 }
 
 auto glyph_rows(char glyph) -> std::array<std::uint8_t, 7>
@@ -278,6 +305,7 @@ public:
 
             update_opening_deal_animation(delta_seconds);
             update_auto_move_animation(delta_seconds);
+            update_completed_run_animation(delta_seconds);
             render();
             SDL_Delay(16);
         }
@@ -299,6 +327,7 @@ private:
     std::optional<ConfirmationAction> pending_confirmation_;
     std::optional<OpeningDealAnimation> opening_deal_animation_;
     std::optional<AutoMoveAnimation> auto_move_animation_;
+    std::optional<CompletedRunAnimation> completed_run_animation_;
     float press_x_ {0.0F};
     float press_y_ {0.0F};
     std::array<Button, 4> buttons_ {};
@@ -315,6 +344,11 @@ private:
         return auto_move_animation_.has_value();
     }
 
+    [[nodiscard]] auto completed_run_active() const -> bool
+    {
+        return completed_run_animation_.has_value();
+    }
+
     [[nodiscard]] auto state() const -> const spider::GameState&
     {
         return session_.state();
@@ -322,7 +356,7 @@ private:
 
     [[nodiscard]] auto animation_active() const -> bool
     {
-        return opening_deal_active() || auto_move_active();
+        return opening_deal_active() || auto_move_active() || completed_run_active();
     }
 
     [[nodiscard]] auto visual_state() const -> const spider::GameState&
@@ -381,6 +415,21 @@ private:
         return std::min<int>(static_cast<int>(rounded_layers), kMaximumDeckLayers);
     }
 
+    [[nodiscard]] auto completed_run_start_time(std::size_t card_index) const -> float
+    {
+        return static_cast<float>(card_index) * kCompletedRunCardStaggerSeconds;
+    }
+
+    [[nodiscard]] auto completed_run_finish_time(std::size_t card_index) const -> float
+    {
+        return completed_run_start_time(card_index) + kCompletedRunFlightSeconds;
+    }
+
+    [[nodiscard]] auto completed_run_total_duration() const -> float
+    {
+        return completed_run_finish_time(spider::GameState::kCompletedRunLength - 1);
+    }
+
     auto current_window_size() const -> std::pair<int, int>
     {
         int width = 0;
@@ -415,7 +464,8 @@ private:
         }
 
         spider::GameSession next_session = session_;
-        if (!next_session.move_sequence(*move)) {
+        std::vector<spider::CompletedRunEvent> completed_runs;
+        if (!next_session.move_sequence(*move, completed_runs)) {
             return false;
         }
 
@@ -423,6 +473,7 @@ private:
             .pending_session = std::move(next_session),
             .move = *move,
             .cards = std::vector<spider::Card>(from_stack.begin() + static_cast<std::ptrdiff_t>(move->start_index), from_stack.end()),
+            .completed_runs = std::move(completed_runs),
             .destination_card_index = state().tableau()[move->to_stack].size(),
             .elapsed_seconds = 0.0F,
         };
@@ -594,6 +645,7 @@ private:
         hovered_button_.reset();
         hovered_stack_.reset();
         auto_move_animation_.reset();
+        completed_run_animation_.reset();
         opening_deal_animation_ = OpeningDealAnimation {
             .pending_session = std::move(next_session),
             .steps = opening_deal.tableau_steps,
@@ -628,9 +680,48 @@ private:
             return;
         }
 
+        auto completed_runs = std::move(auto_move_animation_->completed_runs);
         session_ = std::move(auto_move_animation_->pending_session);
         auto_move_animation_.reset();
         persist_session();
+        if (!completed_runs.empty()) {
+            start_completed_run_animation(std::move(completed_runs));
+        }
+    }
+
+    void start_completed_run_animation(std::vector<spider::CompletedRunEvent> completed_runs)
+    {
+        if (completed_runs.empty()) {
+            return;
+        }
+
+        const std::size_t first_target_pile = state().completed_runs() - completed_runs.size();
+        CompletedRunAnimation animation;
+        animation.flights.reserve(completed_runs.size());
+        for (std::size_t index = 0; index < completed_runs.size(); ++index) {
+            animation.flights.push_back(CompletedRunFlight {
+                .run = completed_runs[index],
+                .target_pile_index = first_target_pile + index,
+            });
+        }
+
+        hovered_button_.reset();
+        hovered_stack_.reset();
+        completed_run_animation_ = std::move(animation);
+    }
+
+    void update_completed_run_animation(float delta_seconds)
+    {
+        if (!completed_run_active()) {
+            return;
+        }
+
+        completed_run_animation_->elapsed_seconds += std::max(delta_seconds, 0.0F);
+        if (completed_run_animation_->elapsed_seconds < completed_run_total_duration()) {
+            return;
+        }
+
+        completed_run_animation_.reset();
     }
 
     void start_new_game()
@@ -651,6 +742,7 @@ private:
             persist_session();
             clear_selection_state();
             cancel_confirmation();
+            completed_run_animation_.reset();
         }
     }
 
@@ -660,14 +752,17 @@ private:
             persist_session();
             clear_selection_state();
             cancel_confirmation();
+            completed_run_animation_.reset();
         }
     }
 
     void deal_stock()
     {
-        if (session_.deal_from_stock()) {
+        std::vector<spider::CompletedRunEvent> completed_runs;
+        if (session_.deal_from_stock(completed_runs)) {
             persist_session();
             clear_selection_state();
+            start_completed_run_animation(std::move(completed_runs));
         }
     }
 
@@ -776,12 +871,14 @@ private:
             .to_stack = destination_stack,
         };
 
-        if (!session_.move_sequence(move)) {
+        std::vector<spider::CompletedRunEvent> completed_runs;
+        if (!session_.move_sequence(move, completed_runs)) {
             return false;
         }
 
         persist_session();
         clear_selection_state();
+        start_completed_run_animation(std::move(completed_runs));
         return true;
     }
 
@@ -1082,6 +1179,26 @@ private:
         }
     }
 
+    [[nodiscard]] auto completed_pile_card_rect(const SDL_FRect& slot, std::size_t ascending_index) const -> SDL_FRect
+    {
+        const float depth = static_cast<float>(std::min<std::size_t>(spider::GameState::kCompletedRunLength - 1 - ascending_index, 4));
+        return SDL_FRect {
+            slot.x - depth * 3.0F,
+            slot.y + depth * 1.5F,
+            slot.w,
+            slot.h,
+        };
+    }
+
+    void render_completed_pile(const SDL_FRect& slot, spider::Suit suit)
+    {
+        draw_placeholder_slot(slot, true);
+        const auto cards = completed_pile_cards(suit);
+        for (std::size_t index = 0; index < cards.size(); ++index) {
+            render_card_sprite(completed_pile_card_rect(slot, index), cards[index], false);
+        }
+    }
+
     [[nodiscard]] auto current_opening_tableau() const -> TableauCards
     {
         TableauCards tableau {};
@@ -1152,6 +1269,38 @@ private:
         }
     }
 
+    void render_completed_run_flights(const spider::LayoutMetrics& layout)
+    {
+        if (!completed_run_active()) {
+            return;
+        }
+
+        const float elapsed_seconds = completed_run_animation_->elapsed_seconds;
+        for (const CompletedRunFlight& flight : completed_run_animation_->flights) {
+            const SDL_FRect target_slot = top_row_slot_rect(layout, 2 + flight.target_pile_index);
+            for (std::size_t ascending_index = 0; ascending_index < spider::GameState::kCompletedRunLength; ++ascending_index) {
+                const float start_time = completed_run_start_time(ascending_index);
+                const float finish_time = completed_run_finish_time(ascending_index);
+                if (elapsed_seconds < start_time || elapsed_seconds >= finish_time) {
+                    continue;
+                }
+
+                const std::size_t stack_offset = spider::GameState::kCompletedRunLength - 1 - ascending_index;
+                const SDL_FRect source = stack_card_rect(layout, flight.run.stack_index, flight.run.start_index + stack_offset);
+                const SDL_FRect target = completed_pile_card_rect(target_slot, ascending_index);
+                const float progress = smoothstep((elapsed_seconds - start_time) / kCompletedRunFlightSeconds);
+                const float arc = std::sin(progress * 3.14159265F) * kCompletedRunArcHeight;
+                const SDL_FRect destination {
+                    lerp(source.x, target.x, progress),
+                    lerp(source.y, target.y, progress) - arc,
+                    layout.card_width,
+                    layout.card_height,
+                };
+                render_card_sprite(destination, flight.run.cards[stack_offset], false);
+            }
+        }
+    }
+
     void render_opening_deal_tableau(const spider::LayoutMetrics& layout)
     {
         const TableauCards tableau = current_opening_tableau();
@@ -1183,12 +1332,14 @@ private:
             draw_placeholder_slot(stock_slot, false);
         }
 
-        const std::size_t completed_slots = std::min<std::size_t>(visual_state().completed_runs(), spider::GameState::kWinningCompletedRuns);
-        for (std::size_t slot_index = 2; slot_index < 10; ++slot_index) {
+        const auto& completed_suits = visual_state().completed_run_suits();
+        const std::size_t animated_slots = completed_run_active() ? completed_run_animation_->flights.size() : 0;
+        const std::size_t visible_completed_slots = completed_suits.size() >= animated_slots ? completed_suits.size() - animated_slots : 0;
+        for (std::size_t completed_index = 0; completed_index < spider::GameState::kWinningCompletedRuns; ++completed_index) {
+            const std::size_t slot_index = completed_index + 2;
             const SDL_FRect slot = top_row_slot_rect(layout, slot_index);
-            const bool filled = (slot_index - 2) < completed_slots;
-            if (filled) {
-                render_card_back_stack(slot, 2);
+            if (completed_index < visible_completed_slots) {
+                render_completed_pile(slot, completed_suits[completed_index]);
             } else {
                 draw_placeholder_slot(slot, false);
             }
@@ -1365,6 +1516,7 @@ private:
         }
 
         SDL_SetRenderClipRect(renderer_, nullptr);
+        render_completed_run_flights(layout);
         render_confirmation_dialog(window_width, window_height);
         SDL_RenderPresent(renderer_);
     }

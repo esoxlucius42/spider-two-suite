@@ -1,5 +1,6 @@
 #include "spider/persistence.hpp"
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -14,7 +15,8 @@ namespace spider {
 
 namespace {
 
-constexpr std::string_view kCurrentFormatHeader = "SPIDER_SESSION_V2";
+constexpr std::string_view kCurrentFormatHeader = "SPIDER_SESSION_V3";
+constexpr std::string_view kPreviousFormatHeader = "SPIDER_SESSION_V2";
 constexpr std::string_view kLegacyFormatHeader = "SPIDER_SESSION_V1";
 
 auto card_identifier_index(const Card& card) -> std::size_t
@@ -37,6 +39,11 @@ auto validate_state(const GameState& state, std::string& error) -> bool
 {
     if (state.completed_runs() > GameState::kWinningCompletedRuns) {
         error = "completed run count exceeds the winning total";
+        return false;
+    }
+
+    if (state.completed_run_suits().size() != state.completed_runs()) {
+        error = "completed run suit count does not match completed run total";
         return false;
     }
 
@@ -105,6 +112,10 @@ auto write_state(std::ostream& output, const GameState& state) -> void
     output << "STATE_BEGIN\n";
     output << "SEED " << state.seed() << '\n';
     output << "COMPLETED_RUNS " << state.completed_runs() << '\n';
+    output << "COMPLETED_SUITS " << state.completed_run_suits().size() << '\n';
+    for (Suit suit : state.completed_run_suits()) {
+        output << "SUIT " << static_cast<unsigned int>(static_cast<std::uint8_t>(suit)) << '\n';
+    }
     output << "MOVE_COUNT " << state.move_count() << '\n';
     output << "TABLEAU_STACKS " << GameState::kTableauStacks << '\n';
     for (std::size_t stack_index = 0; stack_index < GameState::kTableauStacks; ++stack_index) {
@@ -205,7 +216,7 @@ auto read_card(std::istream& input, Card& card, std::string& error) -> bool
     return true;
 }
 
-auto read_state(std::istream& input, std::string& error) -> std::optional<GameState>
+auto read_state(std::istream& input, bool includes_completed_suits, std::string& error) -> std::optional<GameState>
 {
     if (!read_label(input, "STATE_BEGIN", error)) {
         return std::nullopt;
@@ -213,12 +224,38 @@ auto read_state(std::istream& input, std::string& error) -> std::optional<GameSt
 
     std::uint64_t seed = 0;
     std::size_t completed_runs = 0;
+    std::vector<Suit> completed_run_suits;
     std::size_t move_count = 0;
     std::size_t tableau_count = 0;
 
     if (!read_label(input, "SEED", error) || !read_value(input, seed, error, "seed")
-        || !read_label(input, "COMPLETED_RUNS", error) || !read_value(input, completed_runs, error, "completed run count")
-        || !read_label(input, "MOVE_COUNT", error) || !read_value(input, move_count, error, "move count")
+        || !read_label(input, "COMPLETED_RUNS", error) || !read_value(input, completed_runs, error, "completed run count")) {
+        return std::nullopt;
+    }
+
+    if (includes_completed_suits) {
+        std::size_t completed_suit_count = 0;
+        if (!read_label(input, "COMPLETED_SUITS", error) || !read_value(input, completed_suit_count, error, "completed suit count")) {
+            return std::nullopt;
+        }
+
+        completed_run_suits.reserve(completed_suit_count);
+        for (std::size_t index = 0; index < completed_suit_count; ++index) {
+            unsigned int suit_value = 0;
+            if (!read_label(input, "SUIT", error) || !read_value(input, suit_value, error, "completed run suit")) {
+                return std::nullopt;
+            }
+
+            const Suit suit = static_cast<Suit>(static_cast<std::uint8_t>(suit_value));
+            if (std::find(kPlayableSuits.begin(), kPlayableSuits.end(), suit) == kPlayableSuits.end()) {
+                error = "completed run suit is out of range";
+                return std::nullopt;
+            }
+            completed_run_suits.push_back(suit);
+        }
+    }
+
+    if (!read_label(input, "MOVE_COUNT", error) || !read_value(input, move_count, error, "move count")
         || !read_label(input, "TABLEAU_STACKS", error) || !read_value(input, tableau_count, error, "tableau stack count")) {
         return std::nullopt;
     }
@@ -285,7 +322,13 @@ auto read_state(std::istream& input, std::string& error) -> std::optional<GameSt
         return std::nullopt;
     }
 
-    GameState state = GameState::create_restored_game(std::move(tableau), std::move(stock_rows), completed_runs, move_count, seed);
+    GameState state = GameState::create_restored_game(
+        std::move(tableau),
+        std::move(stock_rows),
+        completed_runs,
+        move_count,
+        seed,
+        std::move(completed_run_suits));
     if (!validate_state(state, error)) {
         return std::nullopt;
     }
@@ -306,7 +349,8 @@ auto parse_session(std::string_view text, std::string& error) -> std::optional<G
         error = "save format v1 is no longer supported after the opening deal change";
         return std::nullopt;
     }
-    if (format_header != kCurrentFormatHeader) {
+    const bool includes_completed_suits = format_header == kCurrentFormatHeader;
+    if (!includes_completed_suits && format_header != std::string(kPreviousFormatHeader)) {
         error = "expected supported save format header";
         return std::nullopt;
     }
@@ -315,7 +359,7 @@ auto parse_session(std::string_view text, std::string& error) -> std::optional<G
         return std::nullopt;
     }
 
-    const auto current_state = read_state(input, error);
+    const auto current_state = read_state(input, includes_completed_suits, error);
     if (!current_state.has_value()) {
         return std::nullopt;
     }
@@ -328,7 +372,7 @@ auto parse_session(std::string_view text, std::string& error) -> std::optional<G
     std::vector<GameState> undo_history;
     undo_history.reserve(undo_count);
     for (std::size_t index = 0; index < undo_count; ++index) {
-        const auto state = read_state(input, error);
+        const auto state = read_state(input, includes_completed_suits, error);
         if (!state.has_value()) {
             return std::nullopt;
         }
@@ -343,7 +387,7 @@ auto parse_session(std::string_view text, std::string& error) -> std::optional<G
     std::vector<GameState> redo_history;
     redo_history.reserve(redo_count);
     for (std::size_t index = 0; index < redo_count; ++index) {
-        const auto state = read_state(input, error);
+        const auto state = read_state(input, includes_completed_suits, error);
         if (!state.has_value()) {
             return std::nullopt;
         }

@@ -43,12 +43,18 @@ auto GameSession::can_move_sequence(const Move& move) const -> bool
 
 auto GameSession::move_sequence(const Move& move) -> bool
 {
+    std::vector<CompletedRunEvent> completed_runs;
+    return move_sequence(move, completed_runs);
+}
+
+auto GameSession::move_sequence(const Move& move, std::vector<CompletedRunEvent>& completed_runs) -> bool
+{
     if (!state_.can_move_sequence(move)) {
         return false;
     }
 
     record_state_before_change();
-    return state_.move_sequence(move);
+    return state_.move_sequence(move, completed_runs);
 }
 
 auto GameSession::can_deal_from_stock() const -> bool
@@ -58,12 +64,18 @@ auto GameSession::can_deal_from_stock() const -> bool
 
 auto GameSession::deal_from_stock() -> bool
 {
+    std::vector<CompletedRunEvent> completed_runs;
+    return deal_from_stock(completed_runs);
+}
+
+auto GameSession::deal_from_stock(std::vector<CompletedRunEvent>& completed_runs) -> bool
+{
     if (!state_.can_deal_from_stock()) {
         return false;
     }
 
     record_state_before_change();
-    return state_.deal_from_stock();
+    return state_.deal_from_stock(completed_runs);
 }
 
 auto GameSession::can_undo() const -> bool

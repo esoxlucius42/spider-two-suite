@@ -21,9 +21,11 @@ public:
 
     [[nodiscard]] auto can_move_sequence(const Move& move) const -> bool;
     [[nodiscard]] auto move_sequence(const Move& move) -> bool;
+    [[nodiscard]] auto move_sequence(const Move& move, std::vector<CompletedRunEvent>& completed_runs) -> bool;
 
     [[nodiscard]] auto can_deal_from_stock() const -> bool;
     [[nodiscard]] auto deal_from_stock() -> bool;
+    [[nodiscard]] auto deal_from_stock(std::vector<CompletedRunEvent>& completed_runs) -> bool;
 
     [[nodiscard]] auto can_undo() const -> bool;
     [[nodiscard]] auto can_redo() const -> bool;
