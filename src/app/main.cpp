@@ -48,6 +48,7 @@ struct Button {
         redo,
         confirm_yes,
         confirm_no,
+        dialog_ok,
     };
 
     Action action {};
@@ -97,7 +98,20 @@ struct CompletedRunFlight {
 
 struct CompletedRunAnimation {
     std::vector<CompletedRunFlight> flights {};
+    bool triggers_end_game {};
     float elapsed_seconds {0.0F};
+};
+
+struct EndGameExplodingCard {
+    spider::Card card {};
+    SDL_FRect bounds {};
+    float velocity_x {};
+    float velocity_y {};
+    bool active {true};
+};
+
+struct EndGameAnimation {
+    std::vector<EndGameExplodingCard> cards {};
 };
 
 constexpr std::array<int, 14> kAtlasX {0, 167, 334, 502, 669, 837, 1004, 1172, 1339, 1507, 1674, 1842, 2009, 2179};
@@ -114,6 +128,8 @@ constexpr float kAutoMoveArcHeight = 20.0F;
 constexpr float kCompletedRunCardStaggerSeconds = 0.04F;
 constexpr float kCompletedRunFlightSeconds = 0.34F;
 constexpr float kCompletedRunArcHeight = 26.0F;
+constexpr float kEndGameGravity = 920.0F;
+constexpr float kEndGameTopBounceDamping = 0.78F;
 constexpr int kOpeningDeckCardsPerLayer = 10;
 constexpr int kMaximumDeckLayers = 8;
 
@@ -323,6 +339,7 @@ public:
             update_stock_deal_animation(delta_seconds);
             update_auto_move_animation(delta_seconds);
             update_completed_run_animation(delta_seconds);
+            update_end_game_animation(delta_seconds);
             render();
             SDL_Delay(16);
         }
@@ -346,10 +363,13 @@ private:
     std::optional<StockDealAnimation> stock_deal_animation_;
     std::optional<AutoMoveAnimation> auto_move_animation_;
     std::optional<CompletedRunAnimation> completed_run_animation_;
+    std::optional<EndGameAnimation> end_game_animation_;
+    bool congratulations_dialog_open_ {false};
     float press_x_ {0.0F};
     float press_y_ {0.0F};
     std::array<Button, 4> buttons_ {};
     std::array<Button, 2> dialog_buttons_ {};
+    std::size_t active_dialog_button_count_ {0};
     bool running_ {true};
 
     [[nodiscard]] auto opening_deal_active() const -> bool
@@ -372,6 +392,11 @@ private:
         return completed_run_animation_.has_value();
     }
 
+    [[nodiscard]] auto end_game_active() const -> bool
+    {
+        return end_game_animation_.has_value();
+    }
+
     [[nodiscard]] auto state() const -> const spider::GameState&
     {
         return session_.state();
@@ -379,7 +404,12 @@ private:
 
     [[nodiscard]] auto animation_active() const -> bool
     {
-        return opening_deal_active() || stock_deal_active() || auto_move_active() || completed_run_active();
+        return opening_deal_active() || stock_deal_active() || auto_move_active() || completed_run_active() || end_game_active();
+    }
+
+    [[nodiscard]] auto dialog_active() const -> bool
+    {
+        return pending_confirmation_.has_value() || congratulations_dialog_open_;
     }
 
     [[nodiscard]] auto visual_state() const -> const spider::GameState&
@@ -622,16 +652,31 @@ private:
         const SDL_FRect panel = confirmation_panel_bounds(window_width, window_height);
         const float dialog_button_width = (panel.w - 52.0F) * 0.5F;
         const float dialog_button_y = panel.y + panel.h - 58.0F;
-        dialog_buttons_[0] = Button {
-            .action = Button::Action::confirm_yes,
-            .label = "YES",
-            .bounds = SDL_FRect {panel.x + 18.0F, dialog_button_y, dialog_button_width, 40.0F},
-        };
-        dialog_buttons_[1] = Button {
-            .action = Button::Action::confirm_no,
-            .label = "CANCEL",
-            .bounds = SDL_FRect {panel.x + panel.w - dialog_button_width - 18.0F, dialog_button_y, dialog_button_width, 40.0F},
-        };
+        active_dialog_button_count_ = 0;
+        if (congratulations_dialog_open_) {
+            const float ok_button_width = std::clamp(panel.w * 0.42F, 120.0F, 180.0F);
+            dialog_buttons_[0] = Button {
+                .action = Button::Action::dialog_ok,
+                .label = "OK",
+                .bounds = SDL_FRect {panel.x + (panel.w - ok_button_width) * 0.5F, dialog_button_y, ok_button_width, 40.0F},
+            };
+            active_dialog_button_count_ = 1;
+            return;
+        }
+
+        if (pending_confirmation_.has_value()) {
+            dialog_buttons_[0] = Button {
+                .action = Button::Action::confirm_yes,
+                .label = "YES",
+                .bounds = SDL_FRect {panel.x + 18.0F, dialog_button_y, dialog_button_width, 40.0F},
+            };
+            dialog_buttons_[1] = Button {
+                .action = Button::Action::confirm_no,
+                .label = "CANCEL",
+                .bounds = SDL_FRect {panel.x + panel.w - dialog_button_width - 18.0F, dialog_button_y, dialog_button_width, 40.0F},
+            };
+            active_dialog_button_count_ = 2;
+        }
     }
 
     [[nodiscard]] auto is_button_enabled(Button::Action action) const -> bool
@@ -645,6 +690,7 @@ private:
         case Button::Action::restart:
         case Button::Action::confirm_yes:
         case Button::Action::confirm_no:
+        case Button::Action::dialog_ok:
             return true;
         case Button::Action::undo:
             return session_.can_undo();
@@ -676,6 +722,7 @@ private:
 
     void open_confirmation(ConfirmationAction action)
     {
+        congratulations_dialog_open_ = false;
         pending_confirmation_ = action;
         clear_selection_state();
     }
@@ -683,6 +730,16 @@ private:
     void cancel_confirmation()
     {
         pending_confirmation_.reset();
+        congratulations_dialog_open_ = false;
+    }
+
+    void open_congratulations_dialog()
+    {
+        pending_confirmation_.reset();
+        congratulations_dialog_open_ = true;
+        clear_selection_state();
+        hovered_button_.reset();
+        hovered_stack_.reset();
     }
 
     void update_hover_state(float x, float y)
@@ -700,8 +757,9 @@ private:
         hovered_button_.reset();
         hovered_stack_.reset();
 
-        if (pending_confirmation_.has_value()) {
-            for (const auto& button : dialog_buttons_) {
+        if (dialog_active()) {
+            for (std::size_t index = 0; index < active_dialog_button_count_; ++index) {
+                const auto& button = dialog_buttons_[index];
                 if (point_in_rect(x, y, button.bounds)) {
                     hovered_button_ = button.action;
                     return;
@@ -730,6 +788,7 @@ private:
         stock_deal_animation_.reset();
         auto_move_animation_.reset();
         completed_run_animation_.reset();
+        end_game_animation_.reset();
         opening_deal_animation_ = OpeningDealAnimation {
             .pending_session = std::move(next_session),
             .steps = opening_deal.tableau_steps,
@@ -784,6 +843,7 @@ private:
         hovered_stack_.reset();
         auto_move_animation_.reset();
         completed_run_animation_.reset();
+        end_game_animation_.reset();
         stock_deal_animation_ = std::move(animation);
         return true;
     }
@@ -837,6 +897,7 @@ private:
         const std::size_t first_target_pile = state().completed_runs() - completed_runs.size();
         CompletedRunAnimation animation;
         animation.flights.reserve(completed_runs.size());
+        animation.triggers_end_game = state().has_won();
         for (std::size_t index = 0; index < completed_runs.size(); ++index) {
             animation.flights.push_back(CompletedRunFlight {
                 .run = completed_runs[index],
@@ -847,6 +908,42 @@ private:
         hovered_button_.reset();
         hovered_stack_.reset();
         completed_run_animation_ = std::move(animation);
+    }
+
+    void start_end_game_animation()
+    {
+        const auto [window_width, window_height] = current_window_size();
+        const auto layout = layout_for_window(window_width, window_height);
+
+        EndGameAnimation animation;
+        const auto& completed_suits = state().completed_run_suits();
+        animation.cards.reserve(completed_suits.size() * spider::GameState::kCompletedRunLength);
+
+        for (std::size_t pile_index = 0; pile_index < completed_suits.size(); ++pile_index) {
+            const SDL_FRect slot = top_row_slot_rect(layout, pile_index + 2);
+            const auto cards = completed_pile_cards(completed_suits[pile_index]);
+            const float pile_bias = static_cast<float>(pile_index) - 3.5F;
+
+            for (std::size_t card_index = 0; card_index < cards.size(); ++card_index) {
+                const float fan_bias = static_cast<float>(card_index) - 6.0F;
+                float velocity_x = pile_bias * 118.0F + fan_bias * 24.0F;
+                if (std::fabs(velocity_x) < 76.0F) {
+                    velocity_x = velocity_x < 0.0F ? -76.0F : 76.0F;
+                }
+
+                animation.cards.push_back(EndGameExplodingCard {
+                    .card = cards[card_index],
+                    .bounds = completed_pile_card_rect(slot, card_index),
+                    .velocity_x = velocity_x,
+                    .velocity_y = -(520.0F + std::fabs(pile_bias) * 28.0F + static_cast<float>(card_index % 5) * 26.0F),
+                    .active = true,
+                });
+            }
+        }
+
+        hovered_button_.reset();
+        hovered_stack_.reset();
+        end_game_animation_ = std::move(animation);
     }
 
     void update_completed_run_animation(float delta_seconds)
@@ -860,7 +957,53 @@ private:
             return;
         }
 
+        const bool triggers_end_game = completed_run_animation_->triggers_end_game;
         completed_run_animation_.reset();
+        if (triggers_end_game) {
+            start_end_game_animation();
+        }
+    }
+
+    void update_end_game_animation(float delta_seconds)
+    {
+        if (!end_game_active()) {
+            return;
+        }
+
+        const float dt = std::max(delta_seconds, 0.0F);
+        const auto [window_width, window_height] = current_window_size();
+        const float right_border = static_cast<float>(window_width);
+        const float bottom_border = static_cast<float>(window_height);
+        bool any_cards_left = false;
+
+        for (auto& card : end_game_animation_->cards) {
+            if (!card.active) {
+                continue;
+            }
+
+            card.velocity_y += kEndGameGravity * dt;
+            card.bounds.x += card.velocity_x * dt;
+            card.bounds.y += card.velocity_y * dt;
+
+            if (card.bounds.y <= 0.0F && card.velocity_y < 0.0F) {
+                card.bounds.y = 0.0F;
+                card.velocity_y = -card.velocity_y * kEndGameTopBounceDamping;
+            }
+
+            if ((card.bounds.x <= 0.0F && card.velocity_x < 0.0F)
+                || (card.bounds.x + card.bounds.w >= right_border && card.velocity_x > 0.0F)
+                || (card.bounds.y + card.bounds.h >= bottom_border && card.velocity_y > 0.0F)) {
+                card.active = false;
+                continue;
+            }
+
+            any_cards_left = true;
+        }
+
+        if (!any_cards_left) {
+            end_game_animation_.reset();
+            open_congratulations_dialog();
+        }
     }
 
     void start_new_game()
@@ -882,6 +1025,7 @@ private:
             clear_selection_state();
             cancel_confirmation();
             completed_run_animation_.reset();
+            end_game_animation_.reset();
         }
     }
 
@@ -892,6 +1036,7 @@ private:
             clear_selection_state();
             cancel_confirmation();
             completed_run_animation_.reset();
+            end_game_animation_.reset();
         }
     }
 
@@ -1060,6 +1205,9 @@ private:
         case Button::Action::confirm_no:
             cancel_confirmation();
             return;
+        case Button::Action::dialog_ok:
+            start_new_game();
+            return;
         }
     }
 
@@ -1069,8 +1217,9 @@ private:
         const auto layout = layout_for_window(window_width, window_height);
         layout_ui(layout, window_width, window_height);
 
-        if (pending_confirmation_.has_value()) {
-            for (const auto& button : dialog_buttons_) {
+        if (dialog_active()) {
+            for (std::size_t index = 0; index < active_dialog_button_count_; ++index) {
+                const auto& button = dialog_buttons_[index];
                 if (point_in_rect(x, y, button.bounds)) {
                     handle_button_action(button.action);
                     return;
@@ -1163,7 +1312,7 @@ private:
             running_ = false;
             return;
         case SDL_EVENT_MOUSE_WHEEL:
-            if (pending_confirmation_.has_value() || animation_active()) {
+            if (dialog_active() || animation_active()) {
                 return;
             }
             scroll_offset_ -= event.wheel.y * 64.0F;
@@ -1173,9 +1322,11 @@ private:
             }
             return;
         case SDL_EVENT_KEY_DOWN:
-            if (pending_confirmation_.has_value()) {
+            if (dialog_active()) {
                 if (event.key.key == SDLK_ESCAPE) {
-                    cancel_confirmation();
+                    if (pending_confirmation_.has_value()) {
+                        cancel_confirmation();
+                    }
                 }
                 return;
             }
@@ -1203,7 +1354,7 @@ private:
             if (event.button.button != SDL_BUTTON_LEFT) {
                 return;
             }
-            if (pending_confirmation_.has_value() || animation_active()) {
+            if (dialog_active() || animation_active()) {
                 return;
             }
             press_x_ = event.button.x;
@@ -1224,7 +1375,7 @@ private:
                 return;
             }
             update_hover_state(event.motion.x, event.motion.y);
-            if (pending_confirmation_.has_value()) {
+            if (dialog_active()) {
                 return;
             }
             if (drag_state_.has_value()) {
@@ -1478,6 +1629,21 @@ private:
         }
     }
 
+    void render_end_game_explosion()
+    {
+        if (!end_game_active()) {
+            return;
+        }
+
+        for (const auto& card : end_game_animation_->cards) {
+            if (!card.active) {
+                continue;
+            }
+
+            render_card_sprite(card.bounds, card.card, false);
+        }
+    }
+
     void render_opening_deal_tableau(const spider::LayoutMetrics& layout)
     {
         const TableauCards tableau = current_opening_tableau();
@@ -1533,7 +1699,9 @@ private:
 
         const auto& completed_suits = visual_state().completed_run_suits();
         const std::size_t animated_slots = completed_run_active() ? completed_run_animation_->flights.size() : 0;
-        const std::size_t visible_completed_slots = completed_suits.size() >= animated_slots ? completed_suits.size() - animated_slots : 0;
+        const std::size_t visible_completed_slots = end_game_active()
+            ? 0
+            : (completed_suits.size() >= animated_slots ? completed_suits.size() - animated_slots : 0);
         for (std::size_t completed_index = 0; completed_index < spider::GameState::kWinningCompletedRuns; ++completed_index) {
             const std::size_t slot_index = completed_index + 2;
             const SDL_FRect slot = top_row_slot_rect(layout, slot_index);
@@ -1598,9 +1766,9 @@ private:
         }
     }
 
-    void render_confirmation_dialog(int window_width, int window_height)
+    void render_dialog(int window_width, int window_height)
     {
-        if (!pending_confirmation_.has_value()) {
+        if (!dialog_active()) {
             return;
         }
 
@@ -1610,14 +1778,20 @@ private:
         SDL_SetRenderDrawColor(renderer_, 184, 189, 192, 255);
         SDL_RenderRect(renderer_, &panel);
 
-        const char* title = pending_confirmation_ == ConfirmationAction::new_game ? "NEW GAME" : "RESTART";
-        const char* message = pending_confirmation_ == ConfirmationAction::new_game ? "START A NEW DEAL" : "RESET DEAL TO START";
+        const bool congratulations_dialog = congratulations_dialog_open_;
+        const char* title = congratulations_dialog
+            ? "CONGRATULATIONS"
+            : (pending_confirmation_ == ConfirmationAction::new_game ? "NEW GAME" : "RESTART");
+        const char* message = congratulations_dialog
+            ? "YOU WIN"
+            : (pending_confirmation_ == ConfirmationAction::new_game ? "START A NEW DEAL" : "RESET DEAL TO START");
+        const char* detail = congratulations_dialog ? "OK STARTS NEW DEAL" : "LOSE GAME DATA";
         draw_text(renderer_, title, panel.x + 22.0F, panel.y + 18.0F, 3.2F, SDL_Color {240, 243, 244, 255});
         draw_text(renderer_, message, panel.x + 22.0F, panel.y + 66.0F, 2.3F, SDL_Color {231, 236, 238, 255});
-        draw_text(renderer_, "LOSE GAME DATA", panel.x + 22.0F, panel.y + 100.0F, 2.2F, SDL_Color {223, 202, 146, 255});
+        draw_text(renderer_, detail, panel.x + 22.0F, panel.y + 100.0F, 2.2F, SDL_Color {223, 202, 146, 255});
 
-        for (const auto& button : dialog_buttons_) {
-            draw_button(button, true);
+        for (std::size_t index = 0; index < active_dialog_button_count_; ++index) {
+            draw_button(dialog_buttons_[index], true);
         }
     }
 
@@ -1719,7 +1893,8 @@ private:
 
         SDL_SetRenderClipRect(renderer_, nullptr);
         render_completed_run_flights(layout);
-        render_confirmation_dialog(window_width, window_height);
+        render_end_game_explosion();
+        render_dialog(window_width, window_height);
         SDL_RenderPresent(renderer_);
     }
 };
