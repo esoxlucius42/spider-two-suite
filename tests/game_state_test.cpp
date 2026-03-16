@@ -119,6 +119,37 @@ int main()
     }
 
     {
+        const auto opening_deal = GameState::build_opening_deal(7);
+        expect(opening_deal.tableau_steps.size() == 44, "opening deal helper should emit all tableau cards");
+        expect(opening_deal.stock_rows.size() == GameState::kStockRows, "opening deal helper should retain all stock rows");
+
+        for (std::size_t index = 0; index < 10; ++index) {
+            expect(opening_deal.tableau_steps[index].stack_index == index, "opening deal should start with a left-to-right round");
+            expect(opening_deal.tableau_steps[index].card_index == 0, "opening deal first round should target the bottom slot");
+            expect(!opening_deal.tableau_steps[index].card.face_up, "opening deal first round should stay face down");
+        }
+
+        for (std::size_t offset = 0; offset < 10; ++offset) {
+            const auto& step = opening_deal.tableau_steps[30 + offset];
+            expect(step.stack_index == offset, "opening deal fourth round should still go left to right");
+            expect(step.card_index == 3, "opening deal fourth round should target the fourth slot");
+            expect(step.card.face_up == (offset >= 4), "opening deal fourth round should expose the short stacks only");
+        }
+
+        for (std::size_t offset = 0; offset < 4; ++offset) {
+            const auto& step = opening_deal.tableau_steps[40 + offset];
+            expect(step.stack_index == offset, "opening deal final round should only target the first four stacks");
+            expect(step.card_index == 4, "opening deal final round should target the fifth slot");
+            expect(step.card.face_up, "opening deal final round should expose the tall stacks");
+        }
+
+        const GameState state = GameState::create_new_game(7);
+        for (const auto& step : opening_deal.tableau_steps) {
+            expect(same_card(state.tableau()[step.stack_index][step.card_index], step.card), "opening deal helper should match the created game state");
+        }
+    }
+
+    {
         GameState state = GameState::create_new_game(99);
         const std::size_t before = state.stock_rows_remaining();
         expect(state.deal_from_stock(), "dealing from stock should succeed while stock rows remain");
@@ -146,6 +177,97 @@ int main()
         expect(state.can_move_sequence(Move {.from_stack = 0, .start_index = 1, .to_stack = 1}), "queen should move onto king");
         expect(state.move_sequence(Move {.from_stack = 0, .start_index = 1, .to_stack = 1}), "valid move should execute");
         expect(stacks[1].size() == 2, "destination stack should gain moved card");
+    }
+
+    {
+        GameState state = GameState::create_new_game(3);
+        auto& stacks = state.tableau();
+
+        for (auto& stack : stacks) {
+            stack.clear();
+        }
+
+        stacks[4] = {
+            {.suit = spider::Suit::spades, .rank = spider::Rank::king, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::queen, .face_up = true},
+            {.suit = spider::Suit::spades, .rank = spider::Rank::jack, .face_up = true},
+        };
+        stacks[1] = {
+            {.suit = spider::Suit::hearts, .rank = spider::Rank::king, .face_up = true},
+        };
+        stacks[6] = {
+            {.suit = spider::Suit::spades, .rank = spider::Rank::king, .face_up = true},
+        };
+
+        const auto move = state.find_auto_move(4, 1);
+        expect(move.has_value(), "movable non-top tail should find an automatic destination");
+        expect(move->to_stack == 1, "automatic move should pick the leftmost legal non-empty stack");
+        expect(state.move_sequence(*move), "automatic move should execute through the normal move path");
+        expect(stacks[1].size() == 3, "automatic move should transfer the clicked card and cards above it");
+        expect(stacks[1][1].rank == spider::Rank::queen, "automatic move should place the clicked card first");
+        expect(stacks[1][2].rank == spider::Rank::jack, "automatic move should preserve the tail order");
+    }
+
+    {
+        GameState state = GameState::create_new_game(4);
+        auto& stacks = state.tableau();
+
+        for (auto& stack : stacks) {
+            stack.clear();
+        }
+
+        stacks[5] = {
+            {.suit = spider::Suit::spades, .rank = spider::Rank::queen, .face_up = true},
+        };
+        stacks[0].clear();
+        stacks[2] = {
+            {.suit = spider::Suit::hearts, .rank = spider::Rank::ace, .face_up = true},
+        };
+
+        const auto move = state.find_auto_move(5, 0);
+        expect(move.has_value(), "automatic move should fall back to an empty stack when needed");
+        expect(move->to_stack == 0, "automatic move should pick the leftmost empty stack after non-empty stacks fail");
+    }
+
+    {
+        GameState state = GameState::create_new_game(5);
+        auto& stacks = state.tableau();
+
+        for (auto& stack : stacks) {
+            stack.clear();
+        }
+
+        stacks[3] = {
+            {.suit = spider::Suit::spades, .rank = spider::Rank::queen, .face_up = true},
+        };
+        stacks[0].clear();
+        stacks[1] = {
+            {.suit = spider::Suit::hearts, .rank = spider::Rank::king, .face_up = true},
+        };
+
+        const auto move = state.find_auto_move(3, 0);
+        expect(move.has_value(), "automatic move should still prefer a non-empty legal destination");
+        expect(move->to_stack == 1, "automatic move should ignore earlier empty stacks during the first scan");
+    }
+
+    {
+        GameState state = GameState::create_new_game(6);
+        auto& stacks = state.tableau();
+
+        for (auto& stack : stacks) {
+            stack.clear();
+        }
+
+        stacks[2] = {
+            {.suit = spider::Suit::spades, .rank = spider::Rank::queen, .face_up = true},
+            {.suit = spider::Suit::hearts, .rank = spider::Rank::jack, .face_up = true},
+        };
+        stacks[7] = {
+            {.suit = spider::Suit::hearts, .rank = spider::Rank::king, .face_up = true},
+        };
+
+        expect(!state.find_auto_move(2, 0).has_value(), "automatic move should do nothing for a non-movable mixed-suit tail");
+        expect(!state.find_auto_move(9, 0).has_value(), "automatic move should reject an out-of-range source stack");
     }
 
     {

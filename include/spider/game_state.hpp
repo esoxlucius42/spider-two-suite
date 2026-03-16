@@ -24,7 +24,19 @@ public:
     static constexpr std::size_t kStockRows = 6;
     static constexpr std::size_t kWinningCompletedRuns = 8;
 
+    struct OpeningDealStep {
+        Card card {};
+        std::size_t stack_index {};
+        std::size_t card_index {};
+    };
+
+    struct OpeningDeal {
+        std::vector<OpeningDealStep> tableau_steps {};
+        std::vector<std::array<Card, kStockRowSize>> stock_rows {};
+    };
+
     [[nodiscard]] static auto create_new_game(std::uint64_t seed) -> GameState;
+    [[nodiscard]] static auto build_opening_deal(std::uint64_t seed) -> OpeningDeal;
     [[nodiscard]] static auto create_restored_game(
         std::array<std::vector<Card>, kTableauStacks> tableau,
         std::vector<std::array<Card, kStockRowSize>> stock_rows,
@@ -44,6 +56,7 @@ public:
     [[nodiscard]] auto is_movable_sequence(std::size_t stack_index, std::size_t start_index) const -> bool;
     [[nodiscard]] auto can_move_sequence(const Move& move) const -> bool;
     [[nodiscard]] auto move_sequence(const Move& move) -> bool;
+    [[nodiscard]] auto find_auto_move(std::size_t from_stack, std::size_t start_index) const -> std::optional<Move>;
 
     [[nodiscard]] auto can_deal_from_stock() const -> bool;
     [[nodiscard]] auto deal_from_stock() -> bool;

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <cctype>
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -59,9 +60,22 @@ enum class ConfirmationAction {
     restart,
 };
 
+using TableauCards = std::array<std::vector<spider::Card>, spider::GameState::kTableauStacks>;
+
+struct OpeningDealAnimation {
+    spider::GameSession pending_session {};
+    std::vector<spider::GameState::OpeningDealStep> steps {};
+    float elapsed_seconds {0.0F};
+};
+
 constexpr std::array<int, 14> kAtlasX {0, 167, 334, 502, 669, 837, 1004, 1172, 1339, 1507, 1674, 1842, 2009, 2179};
 constexpr std::array<int, 6> kAtlasY {0, 243, 487, 730, 972, 1216};
 constexpr std::uint64_t kInitialSeed = 20260315ULL;
+constexpr float kOpeningDealCardStaggerSeconds = 0.05F;
+constexpr float kOpeningDealCardFlightSeconds = 0.28F;
+constexpr float kOpeningDealArcHeight = 28.0F;
+constexpr int kOpeningDeckCardsPerLayer = 10;
+constexpr int kMaximumDeckLayers = 8;
 
 auto create_startup_session() -> spider::GameSession
 {
@@ -93,6 +107,17 @@ auto atlas_for_card_back() -> AtlasCell
 auto point_in_rect(float x, float y, const SDL_FRect& rect) -> bool
 {
     return x >= rect.x && x <= rect.x + rect.w && y >= rect.y && y <= rect.y + rect.h;
+}
+
+auto lerp(float start, float end, float progress) -> float
+{
+    return start + (end - start) * progress;
+}
+
+auto smoothstep(float progress) -> float
+{
+    const float clamped = std::clamp(progress, 0.0F, 1.0F);
+    return clamped * clamped * (3.0F - 2.0F * clamped);
 }
 
 auto glyph_rows(char glyph) -> std::array<std::uint8_t, 7>
@@ -228,12 +253,20 @@ public:
 
     auto run() -> int
     {
+        using clock = std::chrono::steady_clock;
+        auto previous_frame_time = clock::now();
+
         while (running_) {
             SDL_Event event;
             while (SDL_PollEvent(&event)) {
                 handle_event(event);
             }
 
+            const auto current_frame_time = clock::now();
+            const float delta_seconds = std::chrono::duration<float>(current_frame_time - previous_frame_time).count();
+            previous_frame_time = current_frame_time;
+
+            update_opening_deal_animation(delta_seconds);
             render();
             SDL_Delay(16);
         }
@@ -253,6 +286,7 @@ private:
     std::optional<std::size_t> hovered_stack_;
     std::optional<Button::Action> hovered_button_;
     std::optional<ConfirmationAction> pending_confirmation_;
+    std::optional<OpeningDealAnimation> opening_deal_animation_;
     float press_x_ {0.0F};
     float press_y_ {0.0F};
     std::array<Button, 4> buttons_ {};
@@ -262,6 +296,67 @@ private:
     [[nodiscard]] auto state() const -> const spider::GameState&
     {
         return session_.state();
+    }
+
+    [[nodiscard]] auto animation_active() const -> bool
+    {
+        return opening_deal_animation_.has_value();
+    }
+
+    [[nodiscard]] auto visual_state() const -> const spider::GameState&
+    {
+        if (opening_deal_animation_.has_value()) {
+            return opening_deal_animation_->pending_session.state();
+        }
+
+        return state();
+    }
+
+    [[nodiscard]] auto opening_deal_start_time(std::size_t step_index) const -> float
+    {
+        return static_cast<float>(step_index) * kOpeningDealCardStaggerSeconds;
+    }
+
+    [[nodiscard]] auto opening_deal_finish_time(std::size_t step_index) const -> float
+    {
+        return opening_deal_start_time(step_index) + kOpeningDealCardFlightSeconds;
+    }
+
+    [[nodiscard]] auto opening_deal_total_duration() const -> float
+    {
+        if (!opening_deal_animation_.has_value() || opening_deal_animation_->steps.empty()) {
+            return 0.0F;
+        }
+
+        return opening_deal_finish_time(opening_deal_animation_->steps.size() - 1);
+    }
+
+    [[nodiscard]] auto opening_deal_started_cards() const -> std::size_t
+    {
+        if (!opening_deal_animation_.has_value()) {
+            return 0;
+        }
+
+        const auto& animation = *opening_deal_animation_;
+        const std::size_t started = static_cast<std::size_t>(animation.elapsed_seconds / kOpeningDealCardStaggerSeconds) + 1;
+        return std::min(started, animation.steps.size());
+    }
+
+    [[nodiscard]] auto opening_deck_card_count() const -> std::size_t
+    {
+        if (!opening_deal_animation_.has_value()) {
+            return state().stock_rows_remaining() * spider::GameState::kStockRowSize;
+        }
+
+        return opening_deal_animation_->pending_session.state().stock_rows_remaining() * spider::GameState::kStockRowSize
+            + opening_deal_animation_->steps.size()
+            - opening_deal_started_cards();
+    }
+
+    [[nodiscard]] auto deck_layers_for_card_count(std::size_t card_count) const -> int
+    {
+        const std::size_t rounded_layers = std::max<std::size_t>(1, (card_count + static_cast<std::size_t>(kOpeningDeckCardsPerLayer) - 1) / static_cast<std::size_t>(kOpeningDeckCardsPerLayer));
+        return std::min<int>(static_cast<int>(rounded_layers), kMaximumDeckLayers);
     }
 
     auto current_window_size() const -> std::pair<int, int>
@@ -283,6 +378,18 @@ private:
             .start_index = selection_->start_index,
             .to_stack = destination_stack,
         });
+    }
+
+    auto try_auto_move_card(const Selection& card) -> bool
+    {
+        const auto move = state().find_auto_move(card.stack_index, card.start_index);
+        if (!move.has_value() || !session_.move_sequence(*move)) {
+            return false;
+        }
+
+        persist_session();
+        clear_selection_state();
+        return true;
     }
 
     auto confirmation_panel_bounds(int window_width, int window_height) const -> SDL_FRect
@@ -354,6 +461,10 @@ private:
 
     [[nodiscard]] auto is_button_enabled(Button::Action action) const -> bool
     {
+        if (animation_active()) {
+            return false;
+        }
+
         switch (action) {
         case Button::Action::new_game:
         case Button::Action::restart:
@@ -401,6 +512,12 @@ private:
 
     void update_hover_state(float x, float y)
     {
+        if (animation_active()) {
+            hovered_button_.reset();
+            hovered_stack_.reset();
+            return;
+        }
+
         const auto [window_width, window_height] = current_window_size();
         const auto layout = layout_for_window(window_width, window_height);
         layout_ui(layout, window_width, window_height);
@@ -428,22 +545,46 @@ private:
         hovered_stack_ = hit_test_stack(x, y, layout);
     }
 
+    void start_opening_deal_animation(spider::GameSession next_session)
+    {
+        const auto opening_deal = spider::GameState::build_opening_deal(next_session.state().seed());
+        cancel_confirmation();
+        reset_for_fresh_layout();
+        hovered_button_.reset();
+        hovered_stack_.reset();
+        opening_deal_animation_ = OpeningDealAnimation {
+            .pending_session = std::move(next_session),
+            .steps = opening_deal.tableau_steps,
+            .elapsed_seconds = 0.0F,
+        };
+    }
+
+    void update_opening_deal_animation(float delta_seconds)
+    {
+        if (!opening_deal_animation_.has_value()) {
+            return;
+        }
+
+        opening_deal_animation_->elapsed_seconds += std::max(delta_seconds, 0.0F);
+        if (opening_deal_animation_->elapsed_seconds < opening_deal_total_duration()) {
+            return;
+        }
+
+        session_ = std::move(opening_deal_animation_->pending_session);
+        opening_deal_animation_.reset();
+        persist_session();
+    }
+
     void start_new_game()
     {
         const auto& current = state();
         const std::uint64_t new_seed = kInitialSeed + current.move_count() + current.completed_runs() + 1;
-        session_.start_new_game(new_seed);
-        persist_session();
-        cancel_confirmation();
-        reset_for_fresh_layout();
+        start_opening_deal_animation(spider::GameSession::create_new_game(new_seed));
     }
 
     void restart_game()
     {
-        session_.restart();
-        persist_session();
-        cancel_confirmation();
-        reset_for_fresh_layout();
+        start_opening_deal_animation(spider::GameSession::create_new_game(state().seed()));
     }
 
     void undo_action()
@@ -476,7 +617,7 @@ private:
     {
         std::array<std::size_t, 10> counts {};
         for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
-            counts[stack_index] = state().tableau()[stack_index].size();
+            counts[stack_index] = visual_state().tableau()[stack_index].size();
         }
         return counts;
     }
@@ -485,7 +626,7 @@ private:
     {
         std::array<std::size_t, 10> counts {};
         for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
-            counts[stack_index] = state().hidden_card_count(stack_index);
+            counts[stack_index] = visual_state().hidden_card_count(stack_index);
         }
         return counts;
     }
@@ -493,6 +634,16 @@ private:
     auto layout_for_window(int width, int height) const -> spider::LayoutMetrics
     {
         return spider::compute_layout(width, height, stack_counts(), hidden_counts(), scroll_offset_);
+    }
+
+    [[nodiscard]] auto stack_card_rect(const spider::LayoutMetrics& layout, std::size_t stack_index, std::size_t card_index) const -> SDL_FRect
+    {
+        return SDL_FRect {
+            layout.stack_x[stack_index],
+            layout.playfield_top + 12.0F - layout.scroll_offset + static_cast<float>(card_index) * layout.stack_vertical_offset,
+            layout.card_width,
+            layout.card_height,
+        };
     }
 
     auto card_rects_for_stack(const spider::LayoutMetrics& layout, std::size_t stack_index) const -> std::vector<SDL_FRect>
@@ -646,6 +797,12 @@ private:
                 return;
             }
 
+            if (!selection_.has_value()) {
+                if (try_auto_move_card(*card)) {
+                    return;
+                }
+            }
+
             selection_ = card;
             return;
         }
@@ -702,7 +859,7 @@ private:
             running_ = false;
             return;
         case SDL_EVENT_MOUSE_WHEEL:
-            if (pending_confirmation_.has_value()) {
+            if (pending_confirmation_.has_value() || animation_active()) {
                 return;
             }
             scroll_offset_ -= event.wheel.y * 64.0F;
@@ -716,6 +873,9 @@ private:
                 if (event.key.key == SDLK_ESCAPE) {
                     cancel_confirmation();
                 }
+                return;
+            }
+            if (animation_active()) {
                 return;
             }
             if (event.key.key == SDLK_ESCAPE) {
@@ -739,7 +899,7 @@ private:
             if (event.button.button != SDL_BUTTON_LEFT) {
                 return;
             }
-            if (pending_confirmation_.has_value()) {
+            if (pending_confirmation_.has_value() || animation_active()) {
                 return;
             }
             press_x_ = event.button.x;
@@ -756,6 +916,9 @@ private:
             }
             return;
         case SDL_EVENT_MOUSE_MOTION:
+            if (animation_active()) {
+                return;
+            }
             update_hover_state(event.motion.x, event.motion.y);
             if (pending_confirmation_.has_value()) {
                 return;
@@ -777,6 +940,9 @@ private:
             return;
         case SDL_EVENT_MOUSE_BUTTON_UP:
             if (event.button.button != SDL_BUTTON_LEFT) {
+                return;
+            }
+            if (animation_active()) {
                 return;
             }
             if (drag_state_.has_value()) {
@@ -858,16 +1024,85 @@ private:
         }
     }
 
+    [[nodiscard]] auto current_opening_tableau() const -> TableauCards
+    {
+        TableauCards tableau {};
+        if (!opening_deal_animation_.has_value()) {
+            return tableau;
+        }
+
+        for (std::size_t step_index = 0; step_index < opening_deal_animation_->steps.size(); ++step_index) {
+            if (opening_deal_animation_->elapsed_seconds < opening_deal_finish_time(step_index)) {
+                break;
+            }
+
+            const auto& step = opening_deal_animation_->steps[step_index];
+            tableau[step.stack_index].push_back(step.card);
+        }
+
+        return tableau;
+    }
+
+    void render_opening_deal_flights(const spider::LayoutMetrics& layout)
+    {
+        if (!opening_deal_animation_.has_value()) {
+            return;
+        }
+
+        const SDL_FRect source = top_row_slot_rect(layout, 0);
+        for (std::size_t step_index = 0; step_index < opening_deal_animation_->steps.size(); ++step_index) {
+            const float start_time = opening_deal_start_time(step_index);
+            const float finish_time = opening_deal_finish_time(step_index);
+            if (opening_deal_animation_->elapsed_seconds < start_time || opening_deal_animation_->elapsed_seconds >= finish_time) {
+                continue;
+            }
+
+            const auto& step = opening_deal_animation_->steps[step_index];
+            const SDL_FRect target = stack_card_rect(layout, step.stack_index, step.card_index);
+            const float progress = smoothstep((opening_deal_animation_->elapsed_seconds - start_time) / kOpeningDealCardFlightSeconds);
+            const float arc = std::sin(progress * 3.14159265F) * kOpeningDealArcHeight;
+            const SDL_FRect destination {
+                lerp(source.x, target.x, progress),
+                lerp(source.y, target.y, progress) - arc,
+                layout.card_width,
+                layout.card_height,
+            };
+            render_card_sprite(destination, step.card, false);
+        }
+    }
+
+    void render_opening_deal_tableau(const spider::LayoutMetrics& layout)
+    {
+        const TableauCards tableau = current_opening_tableau();
+        for (std::size_t stack_index = 0; stack_index < tableau.size(); ++stack_index) {
+            const SDL_FRect slot {
+                layout.stack_x[stack_index],
+                layout.playfield_top + 12.0F,
+                layout.card_width,
+                layout.card_height,
+            };
+
+            SDL_SetRenderDrawColor(renderer_, 36, 108, 56, 255);
+            SDL_RenderRect(renderer_, &slot);
+
+            for (std::size_t card_index = 0; card_index < tableau[stack_index].size(); ++card_index) {
+                render_card_sprite(stack_card_rect(layout, stack_index, card_index), tableau[stack_index][card_index], false);
+            }
+        }
+    }
+
     void render_top_row(const spider::LayoutMetrics& layout)
     {
         const SDL_FRect stock_slot = top_row_slot_rect(layout, 0);
-        if (state().stock_rows_remaining() > 0) {
+        if (animation_active()) {
+            render_card_back_stack(stock_slot, deck_layers_for_card_count(opening_deck_card_count()));
+        } else if (state().stock_rows_remaining() > 0) {
             render_card_back_stack(stock_slot, static_cast<int>(state().stock_rows_remaining()));
         } else {
             draw_placeholder_slot(stock_slot, false);
         }
 
-        const std::size_t completed_slots = std::min<std::size_t>(state().completed_runs(), spider::GameState::kWinningCompletedRuns);
+        const std::size_t completed_slots = std::min<std::size_t>(visual_state().completed_runs(), spider::GameState::kWinningCompletedRuns);
         for (std::size_t slot_index = 2; slot_index < 10; ++slot_index) {
             const SDL_FRect slot = top_row_slot_rect(layout, slot_index);
             const bool filled = (slot_index - 2) < completed_slots;
@@ -1032,11 +1267,16 @@ private:
         };
         SDL_RenderRect(renderer_, &inner_surface);
 
-        for (std::size_t stack_index = 0; stack_index < 10; ++stack_index) {
-            render_stack(layout, stack_index);
-        }
+        if (animation_active()) {
+            render_opening_deal_tableau(layout);
+            render_opening_deal_flights(layout);
+        } else {
+            for (std::size_t stack_index = 0; stack_index < 10; ++stack_index) {
+                render_stack(layout, stack_index);
+            }
 
-        render_drag_stack(layout);
+            render_drag_stack(layout);
+        }
 
         SDL_SetRenderClipRect(renderer_, nullptr);
         render_confirmation_dialog(window_width, window_height);

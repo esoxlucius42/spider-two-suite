@@ -90,32 +90,54 @@ auto GameState::create_new_game(std::uint64_t seed) -> GameState
     GameState state;
     state.seed_ = seed;
 
-    std::vector<Card> deck = build_shuffled_deck(seed);
-    std::size_t cursor = 0;
-
-    for (std::size_t stack_index = 0; stack_index < kTableauStacks; ++stack_index) {
-        const std::size_t cards_in_stack = stack_index < 4 ? 5 : 4;
-        auto& stack = state.tableau_[stack_index];
-        stack.reserve(cards_in_stack);
-
-        for (std::size_t count = 0; count < cards_in_stack; ++count) {
-            stack.push_back(deck[cursor++]);
-        }
-
-        stack.back().face_up = true;
+    OpeningDeal opening_deal = build_opening_deal(seed);
+    for (const OpeningDealStep& step : opening_deal.tableau_steps) {
+        state.tableau_[step.stack_index].push_back(step.card);
     }
 
-    state.stock_rows_.reserve(kStockRows);
+    state.stock_rows_ = std::move(opening_deal.stock_rows);
+    return state;
+}
+
+auto GameState::build_opening_deal(std::uint64_t seed) -> OpeningDeal
+{
+    OpeningDeal opening_deal;
+    opening_deal.tableau_steps.reserve(44);
+
+    std::vector<Card> deck = build_shuffled_deck(seed);
+    std::size_t cursor = 0;
+    std::array<std::size_t, kTableauStacks> dealt_counts {};
+
+    for (std::size_t round = 0; round < 5; ++round) {
+        for (std::size_t stack_index = 0; stack_index < kTableauStacks; ++stack_index) {
+            if (round == 4 && stack_index >= 4) {
+                continue;
+            }
+
+            Card card = deck[cursor++];
+            const std::size_t card_index = dealt_counts[stack_index];
+            const std::size_t final_stack_size = stack_index < 4 ? 5 : 4;
+            card.face_up = (card_index + 1 == final_stack_size);
+            opening_deal.tableau_steps.push_back(OpeningDealStep {
+                .card = card,
+                .stack_index = stack_index,
+                .card_index = card_index,
+            });
+            ++dealt_counts[stack_index];
+        }
+    }
+
+    opening_deal.stock_rows.reserve(kStockRows);
     for (std::size_t row = 0; row < kStockRows; ++row) {
         std::array<Card, kStockRowSize> stock_row {};
         for (Card& card : stock_row) {
             card = deck[cursor++];
             card.face_up = true;
         }
-        state.stock_rows_.push_back(stock_row);
+        opening_deal.stock_rows.push_back(stock_row);
     }
 
-    return state;
+    return opening_deal;
 }
 
 auto GameState::create_restored_game(
@@ -218,6 +240,45 @@ auto GameState::move_sequence(const Move& move) -> bool
     ++move_count_;
 
     return true;
+}
+
+auto GameState::find_auto_move(std::size_t from_stack, std::size_t start_index) const -> std::optional<Move>
+{
+    if (from_stack >= kTableauStacks || !sequence_descends_in_suit(tableau_[from_stack], start_index)) {
+        return std::nullopt;
+    }
+
+    for (std::size_t to_stack = 0; to_stack < kTableauStacks; ++to_stack) {
+        if (to_stack == from_stack || tableau_[to_stack].empty()) {
+            continue;
+        }
+
+        const Move move {
+            .from_stack = from_stack,
+            .start_index = start_index,
+            .to_stack = to_stack,
+        };
+        if (can_move_sequence(move)) {
+            return move;
+        }
+    }
+
+    for (std::size_t to_stack = 0; to_stack < kTableauStacks; ++to_stack) {
+        if (to_stack == from_stack || !tableau_[to_stack].empty()) {
+            continue;
+        }
+
+        const Move move {
+            .from_stack = from_stack,
+            .start_index = start_index,
+            .to_stack = to_stack,
+        };
+        if (can_move_sequence(move)) {
+            return move;
+        }
+    }
+
+    return std::nullopt;
 }
 
 auto GameState::can_deal_from_stock() const -> bool
