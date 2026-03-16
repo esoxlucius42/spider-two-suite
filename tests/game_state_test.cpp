@@ -345,14 +345,22 @@ int main()
         const std::array<std::size_t, 10> small_hidden {4, 4, 4, 4, 3, 3, 3, 3, 3, 3};
         const std::array<std::size_t, 10> tall_counts {22, 21, 23, 20, 22, 21, 24, 20, 21, 22};
         const std::array<std::size_t, 10> tall_hidden {7, 7, 8, 6, 7, 7, 8, 6, 7, 7};
+        const auto squeezed = spider::compute_layout(560, 900, tall_counts, tall_hidden, 0.0F);
 
         const auto roomy = spider::compute_layout(1600, 900, small_counts, small_hidden, 0.0F);
         const auto tight = spider::compute_layout(900, 640, tall_counts, tall_hidden, 400.0F);
+        const float roomy_top_row_spacer = roomy.top_row_slot_x[1] - (roomy.top_row_slot_x[0] + roomy.card_width);
+        const float tight_top_row_spacer = tight.top_row_slot_x[1] - (tight.top_row_slot_x[0] + tight.card_width);
 
         expect(roomy.stack_x[1] > roomy.stack_x[0], "stack x positions should increase left to right");
         expect(tight.card_width < roomy.card_width, "card width should shrink on narrower windows");
-        expect_near(roomy.top_controls_bottom, roomy.outer_margin + roomy.top_controls_height, 0.01F, "roomy layout should expose the controls band bottom");
-        expect_near(tight.top_controls_bottom, tight.outer_margin + tight.top_controls_height, 0.01F, "tight layout should expose the controls band bottom");
+        expect_near(roomy.top_controls_height, 900.0F / 16.0F, 0.01F, "roomy layout should size the controls band from window height");
+        expect_near(tight.top_controls_height, 640.0F / 16.0F, 0.01F, "tight layout should size the controls band from window height");
+        expect_near(roomy.card_height, 900.0F / 6.0F, 0.01F, "roomy layout should size cards from window height");
+        expect_near(tight.card_height, 640.0F / 6.0F, 0.01F, "tight layout should size cards from window height");
+        expect_near(squeezed.card_height, 900.0F / 6.0F, 0.01F, "squeezed layout should keep the requested card height");
+        expect_near(roomy.top_controls_bottom, roomy.top_controls_height, 0.01F, "roomy layout should align the controls bottom with the controls height");
+        expect_near(tight.top_controls_bottom, tight.top_controls_height, 0.01F, "tight layout should align the controls bottom with the controls height");
         expect(roomy.top_row_y >= roomy.top_controls_bottom, "top row should start below the controls band");
         expect(roomy.top_row_bottom <= roomy.playfield_top, "top row should fit before the playfield begins");
         expect(tight.top_row_y >= tight.top_controls_bottom, "tight layout should keep the top row below controls");
@@ -361,10 +369,21 @@ int main()
         expect_near(roomy.top_row_bottom - roomy.top_row_y, roomy.card_height, 0.01F, "roomy top row should reuse the card height");
         expect_near(tight.top_row_y - tight.top_controls_bottom, tight.top_row_gap, 0.01F, "tight layout should reserve the configured gap above the top row");
         expect_near(tight.top_row_bottom - tight.top_row_y, tight.card_height, 0.01F, "tight top row should reuse the card height");
+        expect_near(roomy.top_row_slot_x[0], roomy.outer_margin, 0.01F, "roomy layout should keep the stock pile left-aligned");
+        expect_near(tight.top_row_slot_x[0], tight.outer_margin, 0.01F, "tight layout should keep the stock pile left-aligned");
+        expect_near(roomy.top_row_slot_x[8] + roomy.card_width, 1600.0F - roomy.outer_margin, 0.01F, "roomy layout should right-align the last completed pile slot");
+        expect_near(tight.top_row_slot_x[8] + tight.card_width, 900.0F - tight.outer_margin, 0.01F, "tight layout should right-align the last completed pile slot");
+        expect_near(roomy.top_row_slot_x[2] - roomy.top_row_slot_x[1], roomy.card_width + roomy.stack_gap, 0.01F, "roomy completed pile slots should keep the configured spacing");
+        expect_near(tight.top_row_slot_x[2] - tight.top_row_slot_x[1], tight.card_width + tight.stack_gap, 0.01F, "tight completed pile slots should keep the configured spacing");
+        expect(roomy_top_row_spacer > tight_top_row_spacer, "wider windows should grow the empty top-row spacer");
+        expect(tight_top_row_spacer >= tight.stack_gap - 0.01F, "tight layouts should still leave a gap between stock and completed piles");
         expect_near(roomy.playfield_top - roomy.top_row_bottom, roomy.top_row_gap, 0.01F, "roomy layout should reserve the configured gap below the top row");
         expect_near(tight.playfield_top - tight.top_row_bottom, tight.top_row_gap, 0.01F, "tight layout should reserve the configured gap below the top row");
         expect_near(roomy.stack_vertical_offset, roomy.card_height / 6.0F, 0.01F, "roomy layout should derive stack spacing from card height");
         expect_near(tight.stack_vertical_offset, tight.card_height / 6.0F, 0.01F, "tight layout should derive stack spacing from card height");
+        expect_near(roomy.card_width, roomy.card_height / 1.45F, 0.01F, "roomy layout should preserve the existing card aspect ratio when width allows it");
+        expect_near(tight.card_width, tight.card_height / 1.45F, 0.01F, "tight layout should preserve the existing card aspect ratio when width allows it");
+        expect(squeezed.card_width < squeezed.card_height / 1.45F, "squeezed layout should compress card width to keep the tableau visible");
         expect(tight.stack_vertical_offset < roomy.stack_vertical_offset, "stack spacing should recompute when resize changes card size");
         expect(tight.scroll_offset >= 0.0F, "scroll offset should remain non-negative");
         expect(tight.content_height >= tight.playfield_height, "tall layouts should produce scrollable content");

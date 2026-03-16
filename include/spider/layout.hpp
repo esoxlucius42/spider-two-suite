@@ -21,6 +21,7 @@ struct LayoutMetrics {
     float stack_slot_height {};
     float content_height {};
     float scroll_offset {};
+    std::array<float, 9> top_row_slot_x {};
     std::array<float, 10> stack_x {};
 };
 

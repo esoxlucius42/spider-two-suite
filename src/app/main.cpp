@@ -612,7 +612,7 @@ private:
     auto top_row_slot_rect(const spider::LayoutMetrics& layout, std::size_t slot_index) const -> SDL_FRect
     {
         return SDL_FRect {
-            layout.stack_x[slot_index],
+            layout.top_row_slot_x[slot_index],
             layout.top_row_y,
             layout.card_width,
             layout.card_height,
@@ -621,44 +621,50 @@ private:
 
     void layout_ui(const spider::LayoutMetrics& layout, int window_width, int window_height)
     {
-        const float top_y = layout.outer_margin + 7.0F;
-        const float button_height = layout.top_controls_height - 20.0F;
-        const float button_gap = std::clamp(layout.outer_margin * 0.35F, 10.0F, 18.0F);
-        const float right_reserved = 120.0F;
-        const float available_width = std::max(448.0F, static_cast<float>(window_width) - layout.outer_margin * 2.0F - right_reserved);
-        const float button_width = std::clamp((available_width - button_gap * 3.0F) / 4.0F, 104.0F, 156.0F);
+        const float button_padding_y = layout.top_controls_height * 0.14F;
+        const float button_height = std::max(0.0F, layout.top_controls_height - button_padding_y * 2.0F);
+        const float top_y = button_padding_y;
+        const float button_gap = std::max(layout.top_controls_height * 0.18F, layout.outer_margin * 0.3F);
+        const float requested_button_width = button_height * 2.85F + layout.outer_margin * 0.75F;
+        const float max_button_width = std::max(0.0F, (static_cast<float>(window_width) - layout.outer_margin * 2.0F - button_gap * 3.0F) / 4.0F);
+        const float button_width = std::min(requested_button_width, max_button_width);
+        const float button_row_width = button_width * 4.0F + button_gap * 3.0F;
+        const float start_x = std::max(layout.outer_margin, (static_cast<float>(window_width) - button_row_width) * 0.5F);
 
         buttons_[0] = Button {
             .action = Button::Action::new_game,
             .label = "NEW GAME",
-            .bounds = SDL_FRect {layout.outer_margin, top_y, button_width, button_height},
+            .bounds = SDL_FRect {start_x, top_y, button_width, button_height},
         };
         buttons_[1] = Button {
             .action = Button::Action::restart,
             .label = "RESTART",
-            .bounds = SDL_FRect {layout.outer_margin + (button_width + button_gap), top_y, button_width, button_height},
+            .bounds = SDL_FRect {start_x + (button_width + button_gap), top_y, button_width, button_height},
         };
         buttons_[2] = Button {
             .action = Button::Action::undo,
             .label = "UNDO",
-            .bounds = SDL_FRect {layout.outer_margin + (button_width + button_gap) * 2.0F, top_y, button_width, button_height},
+            .bounds = SDL_FRect {start_x + (button_width + button_gap) * 2.0F, top_y, button_width, button_height},
         };
         buttons_[3] = Button {
             .action = Button::Action::redo,
             .label = "REDO",
-            .bounds = SDL_FRect {layout.outer_margin + (button_width + button_gap) * 3.0F, top_y, button_width, button_height},
+            .bounds = SDL_FRect {start_x + (button_width + button_gap) * 3.0F, top_y, button_width, button_height},
         };
 
         const SDL_FRect panel = confirmation_panel_bounds(window_width, window_height);
-        const float dialog_button_width = (panel.w - 52.0F) * 0.5F;
-        const float dialog_button_y = panel.y + panel.h - 58.0F;
+        const float dialog_padding_x = panel.w * 0.045F;
+        const float dialog_padding_bottom = panel.h * 0.1F;
+        const float dialog_button_height = panel.h * 0.22F;
+        const float dialog_button_width = (panel.w - dialog_padding_x * 3.0F) * 0.5F;
+        const float dialog_button_y = panel.y + panel.h - dialog_button_height - dialog_padding_bottom;
         active_dialog_button_count_ = 0;
         if (congratulations_dialog_open_) {
-            const float ok_button_width = std::clamp(panel.w * 0.42F, 120.0F, 180.0F);
+            const float ok_button_width = panel.w * 0.28F;
             dialog_buttons_[0] = Button {
                 .action = Button::Action::dialog_ok,
                 .label = "OK",
-                .bounds = SDL_FRect {panel.x + (panel.w - ok_button_width) * 0.5F, dialog_button_y, ok_button_width, 40.0F},
+                .bounds = SDL_FRect {panel.x + (panel.w - ok_button_width) * 0.5F, dialog_button_y, ok_button_width, dialog_button_height},
             };
             active_dialog_button_count_ = 1;
             return;
@@ -668,12 +674,12 @@ private:
             dialog_buttons_[0] = Button {
                 .action = Button::Action::confirm_yes,
                 .label = "YES",
-                .bounds = SDL_FRect {panel.x + 18.0F, dialog_button_y, dialog_button_width, 40.0F},
+                .bounds = SDL_FRect {panel.x + dialog_padding_x, dialog_button_y, dialog_button_width, dialog_button_height},
             };
             dialog_buttons_[1] = Button {
                 .action = Button::Action::confirm_no,
                 .label = "CANCEL",
-                .bounds = SDL_FRect {panel.x + panel.w - dialog_button_width - 18.0F, dialog_button_y, dialog_button_width, 40.0F},
+                .bounds = SDL_FRect {panel.x + panel.w - dialog_button_width - dialog_padding_x, dialog_button_y, dialog_button_width, dialog_button_height},
             };
             active_dialog_button_count_ = 2;
         }
@@ -920,7 +926,7 @@ private:
         animation.cards.reserve(completed_suits.size() * spider::GameState::kCompletedRunLength);
 
         for (std::size_t pile_index = 0; pile_index < completed_suits.size(); ++pile_index) {
-            const SDL_FRect slot = top_row_slot_rect(layout, pile_index + 2);
+            const SDL_FRect slot = top_row_slot_rect(layout, pile_index + 1);
             const auto cards = completed_pile_cards(completed_suits[pile_index]);
             const float pile_bias = static_cast<float>(pile_index) - 3.5F;
 
@@ -1421,9 +1427,11 @@ private:
         SDL_SetRenderDrawColor(renderer_, hovered ? 236 : 180, hovered ? 234 : 214, hovered ? 221 : 226, 255);
         SDL_RenderRect(renderer_, &button.bounds);
 
-        const float horizontal_padding = 16.0F;
-        const float width_limited_scale = (button.bounds.w - horizontal_padding) / std::max(1.0F, static_cast<float>(button.label.size() * 6U - 1U));
-        const float text_scale = std::clamp(std::min(button.bounds.h / 13.0F, width_limited_scale), 1.6F, 2.6F);
+        const float horizontal_padding = button.bounds.h * 0.45F;
+        const float width_limited_scale = std::max(
+            1.0F,
+            (button.bounds.w - horizontal_padding * 2.0F) / std::max(1.0F, static_cast<float>(button.label.size() * 6U - 1U)));
+        const float text_scale = std::max(1.0F, std::min(button.bounds.h / 10.5F, width_limited_scale));
         const float text_width = static_cast<float>(button.label.size()) * 6.0F * text_scale - text_scale;
         const float text_x = button.bounds.x + (button.bounds.w - text_width) * 0.5F;
         const float text_y = button.bounds.y + (button.bounds.h - (7.0F * text_scale)) * 0.5F;
@@ -1605,7 +1613,7 @@ private:
 
         const float elapsed_seconds = completed_run_animation_->elapsed_seconds;
         for (const CompletedRunFlight& flight : completed_run_animation_->flights) {
-            const SDL_FRect target_slot = top_row_slot_rect(layout, 2 + flight.target_pile_index);
+            const SDL_FRect target_slot = top_row_slot_rect(layout, 1 + flight.target_pile_index);
             for (std::size_t ascending_index = 0; ascending_index < spider::GameState::kCompletedRunLength; ++ascending_index) {
                 const float start_time = completed_run_start_time(ascending_index);
                 const float finish_time = completed_run_finish_time(ascending_index);
@@ -1703,7 +1711,7 @@ private:
             ? 0
             : (completed_suits.size() >= animated_slots ? completed_suits.size() - animated_slots : 0);
         for (std::size_t completed_index = 0; completed_index < spider::GameState::kWinningCompletedRuns; ++completed_index) {
-            const std::size_t slot_index = completed_index + 2;
+            const std::size_t slot_index = completed_index + 1;
             const SDL_FRect slot = top_row_slot_rect(layout, slot_index);
             if (completed_index < visible_completed_slots) {
                 render_completed_pile(slot, completed_suits[completed_index]);
@@ -1806,15 +1814,17 @@ private:
         SDL_RenderClear(renderer_);
 
         SDL_SetRenderDrawColor(renderer_, 65, 66, 70, 255);
-        const SDL_FRect controls_bar {0.0F, 0.0F, static_cast<float>(window_width), layout.top_controls_bottom};
+        const SDL_FRect controls_bar {0.0F, 0.0F, static_cast<float>(window_width), layout.top_controls_height};
         SDL_RenderFillRect(renderer_, &controls_bar);
 
+        const float controls_inset_x = layout.outer_margin * 0.4F;
+        const float controls_inset_y = layout.top_controls_height * 0.12F;
         SDL_SetRenderDrawColor(renderer_, 88, 88, 92, 255);
         const SDL_FRect controls_bar_inner {
-            layout.outer_margin * 0.45F,
-            layout.outer_margin * 0.35F,
-            static_cast<float>(window_width) - layout.outer_margin * 0.9F,
-            layout.top_controls_bottom - layout.outer_margin * 0.55F,
+            controls_inset_x,
+            controls_inset_y,
+            static_cast<float>(window_width) - controls_inset_x * 2.0F,
+            std::max(0.0F, layout.top_controls_height - controls_inset_y * 2.0F),
         };
         SDL_RenderRect(renderer_, &controls_bar_inner);
 
