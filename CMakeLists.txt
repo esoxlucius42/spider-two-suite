@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.21)
 
 project(spider_two_suites LANGUAGES CXX)
 
+include(GNUInstallDirs)
+
 option(SPIDER_BUILD_APP "Build the SDL3 game executable" ON)
 option(SPIDER_BUILD_TESTS "Build unit tests" ON)
 
@@ -46,6 +48,28 @@ if(SPIDER_BUILD_APP)
         PRIVATE
             SPIDER_ASSET_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/src/assets"
     )
+
+    if(UNIX AND NOT APPLE)
+        install(TARGETS spider_two_suites
+            RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+        )
+
+        install(FILES packaging/linux/spider-two-suites.desktop
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/applications
+        )
+
+        install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/assets/
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/spider-two-suites/assets
+            FILES_MATCHING
+                PATTERN "*.png"
+        )
+
+        install(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/src/assets/icons/hicolor/
+            DESTINATION ${CMAKE_INSTALL_DATADIR}/icons/hicolor
+            FILES_MATCHING
+                PATTERN "*.png"
+        )
+    endif()
 endif()
 
 if(SPIDER_BUILD_TESTS)

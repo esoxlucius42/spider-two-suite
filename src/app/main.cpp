@@ -12,8 +12,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
+#include <filesystem>
 #include <optional>
 #include <stdexcept>
+#include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
@@ -117,6 +119,10 @@ struct EndGameAnimation {
 constexpr std::array<int, 14> kAtlasX {0, 167, 334, 502, 669, 837, 1004, 1172, 1339, 1507, 1674, 1842, 2009, 2179};
 constexpr std::array<int, 6> kAtlasY {0, 243, 487, 730, 972, 1216};
 constexpr std::uint64_t kInitialSeed = 20260315ULL;
+constexpr std::string_view kAppName = "Spider Two Suites";
+constexpr std::string_view kAppIdentifier = "dev.esox.spider-two-suites";
+constexpr std::string_view kIconAssetPath = "icons/hicolor/128x128/apps/spider-two-suites.png";
+constexpr std::string_view kInstallAssetDirectory = "../share/spider-two-suites/assets";
 constexpr float kOpeningDealCardStaggerSeconds = 0.05F;
 constexpr float kOpeningDealCardFlightSeconds = 0.28F;
 constexpr float kOpeningDealArcHeight = 28.0F;
@@ -136,6 +142,31 @@ constexpr int kMaximumDeckLayers = 8;
 auto create_startup_session() -> spider::GameSession
 {
     return spider::resume_or_create_session(kInitialSeed);
+}
+
+auto build_asset_path(std::filesystem::path root, std::string_view relative_path) -> std::filesystem::path
+{
+    return (std::move(root) / std::filesystem::path {std::string(relative_path)}).lexically_normal();
+}
+
+auto resolve_asset_path(std::string_view relative_path) -> std::filesystem::path
+{
+    std::error_code error;
+    const auto source_path = build_asset_path(std::filesystem::path {SPIDER_ASSET_ROOT}, relative_path);
+    if (std::filesystem::exists(source_path, error)) {
+        return source_path;
+    }
+
+    const char* const base_path = SDL_GetBasePath();
+    if (base_path != nullptr) {
+        error.clear();
+        const auto installed_path = build_asset_path(std::filesystem::path {base_path} / kInstallAssetDirectory, relative_path);
+        if (std::filesystem::exists(installed_path, error)) {
+            return installed_path;
+        }
+    }
+
+    throw std::runtime_error("Unable to locate asset: " + std::string(relative_path));
 }
 
 auto atlas_cell(int row, int column) -> AtlasCell
@@ -286,21 +317,37 @@ public:
     App()
         : session_(create_startup_session())
     {
+        if (!SDL_SetAppMetadata(kAppName.data(), nullptr, kAppIdentifier.data())) {
+            throw std::runtime_error(SDL_GetError());
+        }
+
         if (!SDL_Init(SDL_INIT_VIDEO)) {
             throw std::runtime_error(SDL_GetError());
         }
 
-        window_ = SDL_CreateWindow("Spider Two Suites", 1440, 900, SDL_WINDOW_RESIZABLE);
+        window_ = SDL_CreateWindow(kAppName.data(), 1440, 900, SDL_WINDOW_RESIZABLE);
         if (window_ == nullptr) {
             throw std::runtime_error(SDL_GetError());
         }
+
+        const std::string icon_path = resolve_asset_path(kIconAssetPath).string();
+        SDL_Surface* window_icon = IMG_Load(icon_path.c_str());
+        if (window_icon == nullptr) {
+            throw std::runtime_error(SDL_GetError());
+        }
+        if (!SDL_SetWindowIcon(window_, window_icon)) {
+            SDL_DestroySurface(window_icon);
+            throw std::runtime_error(SDL_GetError());
+        }
+        SDL_DestroySurface(window_icon);
 
         renderer_ = SDL_CreateRenderer(window_, nullptr);
         if (renderer_ == nullptr) {
             throw std::runtime_error(SDL_GetError());
         }
 
-        cards_texture_ = IMG_LoadTexture(renderer_, SPIDER_ASSET_ROOT "/cards.png");
+        const std::string cards_path = resolve_asset_path("cards.png").string();
+        cards_texture_ = IMG_LoadTexture(renderer_, cards_path.c_str());
         if (cards_texture_ == nullptr) {
             throw std::runtime_error(SDL_GetError());
         }

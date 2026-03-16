@@ -6,6 +6,7 @@
 struct SDL_Window {};
 struct SDL_Renderer {};
 struct SDL_Texture {};
+struct SDL_Surface {};
 
 struct SDL_FRect {
     float x {};
@@ -89,6 +90,10 @@ inline auto SDL_CreateWindow(const char*, int, int, unsigned int) -> SDL_Window*
 }
 
 inline void SDL_DestroyWindow(SDL_Window*) {}
+inline auto SDL_SetWindowIcon(SDL_Window*, SDL_Surface*) -> bool
+{
+    return true;
+}
 
 inline auto SDL_CreateRenderer(SDL_Window*, const char*) -> SDL_Renderer*
 {
@@ -98,6 +103,15 @@ inline auto SDL_CreateRenderer(SDL_Window*, const char*) -> SDL_Renderer*
 
 inline void SDL_DestroyRenderer(SDL_Renderer*) {}
 inline void SDL_DestroyTexture(SDL_Texture*) {}
+inline void SDL_DestroySurface(SDL_Surface*) {}
+inline auto SDL_SetAppMetadata(const char*, const char*, const char*) -> bool
+{
+    return true;
+}
+inline auto SDL_GetBasePath() -> const char*
+{
+    return "./";
+}
 
 inline auto SDL_PollEvent(SDL_Event* event) -> bool
 {

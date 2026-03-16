@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Spider Two Suites
+Comment=Play Spider Two Suites
+Exec=spider_two_suites
+Icon=spider-two-suites
+Terminal=false
+Categories=Game;CardGame;
+Keywords=spider;solitaire;cards;
+StartupNotify=true
