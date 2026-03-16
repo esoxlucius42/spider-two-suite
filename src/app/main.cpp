@@ -68,6 +68,19 @@ struct OpeningDealAnimation {
     float elapsed_seconds {0.0F};
 };
 
+struct StockDealStep {
+    spider::Card card {};
+    std::size_t stack_index {};
+    std::size_t card_index {};
+};
+
+struct StockDealAnimation {
+    spider::GameSession pending_session {};
+    std::vector<StockDealStep> steps {};
+    std::vector<spider::CompletedRunEvent> completed_runs {};
+    float elapsed_seconds {0.0F};
+};
+
 struct AutoMoveAnimation {
     spider::GameSession pending_session {};
     spider::Move move {};
@@ -93,6 +106,9 @@ constexpr std::uint64_t kInitialSeed = 20260315ULL;
 constexpr float kOpeningDealCardStaggerSeconds = 0.05F;
 constexpr float kOpeningDealCardFlightSeconds = 0.28F;
 constexpr float kOpeningDealArcHeight = 28.0F;
+constexpr float kStockDealCardStaggerSeconds = 0.06F;
+constexpr float kStockDealCardFlightSeconds = 0.24F;
+constexpr float kStockDealArcHeight = 24.0F;
 constexpr float kAutoMoveFlightSeconds = 0.22F;
 constexpr float kAutoMoveArcHeight = 20.0F;
 constexpr float kCompletedRunCardStaggerSeconds = 0.04F;
@@ -304,6 +320,7 @@ public:
             previous_frame_time = current_frame_time;
 
             update_opening_deal_animation(delta_seconds);
+            update_stock_deal_animation(delta_seconds);
             update_auto_move_animation(delta_seconds);
             update_completed_run_animation(delta_seconds);
             render();
@@ -326,6 +343,7 @@ private:
     std::optional<Button::Action> hovered_button_;
     std::optional<ConfirmationAction> pending_confirmation_;
     std::optional<OpeningDealAnimation> opening_deal_animation_;
+    std::optional<StockDealAnimation> stock_deal_animation_;
     std::optional<AutoMoveAnimation> auto_move_animation_;
     std::optional<CompletedRunAnimation> completed_run_animation_;
     float press_x_ {0.0F};
@@ -344,6 +362,11 @@ private:
         return auto_move_animation_.has_value();
     }
 
+    [[nodiscard]] auto stock_deal_active() const -> bool
+    {
+        return stock_deal_animation_.has_value();
+    }
+
     [[nodiscard]] auto completed_run_active() const -> bool
     {
         return completed_run_animation_.has_value();
@@ -356,7 +379,7 @@ private:
 
     [[nodiscard]] auto animation_active() const -> bool
     {
-        return opening_deal_active() || auto_move_active() || completed_run_active();
+        return opening_deal_active() || stock_deal_active() || auto_move_active() || completed_run_active();
     }
 
     [[nodiscard]] auto visual_state() const -> const spider::GameState&
@@ -409,6 +432,47 @@ private:
             - opening_deal_started_cards();
     }
 
+    [[nodiscard]] auto stock_deal_start_time(std::size_t step_index) const -> float
+    {
+        return static_cast<float>(step_index) * kStockDealCardStaggerSeconds;
+    }
+
+    [[nodiscard]] auto stock_deal_finish_time(std::size_t step_index) const -> float
+    {
+        return stock_deal_start_time(step_index) + kStockDealCardFlightSeconds;
+    }
+
+    [[nodiscard]] auto stock_deal_total_duration() const -> float
+    {
+        if (!stock_deal_animation_.has_value() || stock_deal_animation_->steps.empty()) {
+            return 0.0F;
+        }
+
+        return stock_deal_finish_time(stock_deal_animation_->steps.size() - 1);
+    }
+
+    [[nodiscard]] auto stock_deal_started_cards() const -> std::size_t
+    {
+        if (!stock_deal_animation_.has_value()) {
+            return 0;
+        }
+
+        const auto& animation = *stock_deal_animation_;
+        const std::size_t started = static_cast<std::size_t>(animation.elapsed_seconds / kStockDealCardStaggerSeconds) + 1;
+        return std::min(started, animation.steps.size());
+    }
+
+    [[nodiscard]] auto stock_deal_deck_card_count() const -> std::size_t
+    {
+        if (!stock_deal_animation_.has_value()) {
+            return state().stock_rows_remaining() * spider::GameState::kStockRowSize;
+        }
+
+        return stock_deal_animation_->pending_session.state().stock_rows_remaining() * spider::GameState::kStockRowSize
+            + stock_deal_animation_->steps.size()
+            - stock_deal_started_cards();
+    }
+
     [[nodiscard]] auto deck_layers_for_card_count(std::size_t card_count) const -> int
     {
         const std::size_t rounded_layers = std::max<std::size_t>(1, (card_count + static_cast<std::size_t>(kOpeningDeckCardsPerLayer) - 1) / static_cast<std::size_t>(kOpeningDeckCardsPerLayer));
@@ -449,6 +513,25 @@ private:
             .start_index = selection_->start_index,
             .to_stack = destination_stack,
         });
+    }
+
+    [[nodiscard]] auto current_stock_deal_tableau() const -> TableauCards
+    {
+        TableauCards tableau = state().tableau();
+        if (!stock_deal_animation_.has_value()) {
+            return tableau;
+        }
+
+        for (std::size_t step_index = 0; step_index < stock_deal_animation_->steps.size(); ++step_index) {
+            if (stock_deal_animation_->elapsed_seconds < stock_deal_finish_time(step_index)) {
+                break;
+            }
+
+            const auto& step = stock_deal_animation_->steps[step_index];
+            tableau[step.stack_index].push_back(step.card);
+        }
+
+        return tableau;
     }
 
     auto try_auto_move_card(const Selection& card) -> bool
@@ -644,6 +727,7 @@ private:
         reset_for_fresh_layout();
         hovered_button_.reset();
         hovered_stack_.reset();
+        stock_deal_animation_.reset();
         auto_move_animation_.reset();
         completed_run_animation_.reset();
         opening_deal_animation_ = OpeningDealAnimation {
@@ -667,6 +751,61 @@ private:
         session_ = std::move(opening_deal_animation_->pending_session);
         opening_deal_animation_.reset();
         persist_session();
+    }
+
+    auto start_stock_deal_animation() -> bool
+    {
+        const auto& stock_rows = state().stock_rows();
+        if (stock_rows.empty()) {
+            return false;
+        }
+
+        spider::GameSession next_session = session_;
+        std::vector<spider::CompletedRunEvent> completed_runs;
+        if (!next_session.deal_from_stock(completed_runs)) {
+            return false;
+        }
+
+        StockDealAnimation animation;
+        animation.pending_session = std::move(next_session);
+        animation.completed_runs = std::move(completed_runs);
+        animation.steps.reserve(spider::GameState::kStockRowSize);
+        for (std::size_t stack_index = 0; stack_index < spider::GameState::kTableauStacks; ++stack_index) {
+            animation.steps.push_back(StockDealStep {
+                .card = stock_rows.front()[stack_index],
+                .stack_index = stack_index,
+                .card_index = state().tableau()[stack_index].size(),
+            });
+        }
+
+        clear_selection_state();
+        cancel_confirmation();
+        hovered_button_.reset();
+        hovered_stack_.reset();
+        auto_move_animation_.reset();
+        completed_run_animation_.reset();
+        stock_deal_animation_ = std::move(animation);
+        return true;
+    }
+
+    void update_stock_deal_animation(float delta_seconds)
+    {
+        if (!stock_deal_active()) {
+            return;
+        }
+
+        stock_deal_animation_->elapsed_seconds += std::max(delta_seconds, 0.0F);
+        if (stock_deal_animation_->elapsed_seconds < stock_deal_total_duration()) {
+            return;
+        }
+
+        auto completed_runs = std::move(stock_deal_animation_->completed_runs);
+        session_ = std::move(stock_deal_animation_->pending_session);
+        stock_deal_animation_.reset();
+        persist_session();
+        if (!completed_runs.empty()) {
+            start_completed_run_animation(std::move(completed_runs));
+        }
     }
 
     void update_auto_move_animation(float delta_seconds)
@@ -758,17 +897,20 @@ private:
 
     void deal_stock()
     {
-        std::vector<spider::CompletedRunEvent> completed_runs;
-        if (session_.deal_from_stock(completed_runs)) {
-            persist_session();
-            clear_selection_state();
-            start_completed_run_animation(std::move(completed_runs));
-        }
+        start_stock_deal_animation();
     }
 
     auto stack_counts() const -> std::array<std::size_t, 10>
     {
         std::array<std::size_t, 10> counts {};
+        if (stock_deal_active()) {
+            const TableauCards tableau = current_stock_deal_tableau();
+            for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
+                counts[stack_index] = tableau[stack_index].size();
+            }
+            return counts;
+        }
+
         for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
             counts[stack_index] = visual_state().tableau()[stack_index].size();
         }
@@ -778,6 +920,13 @@ private:
     auto hidden_counts() const -> std::array<std::size_t, 10>
     {
         std::array<std::size_t, 10> counts {};
+        if (stock_deal_active()) {
+            for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
+                counts[stack_index] = state().hidden_card_count(stack_index);
+            }
+            return counts;
+        }
+
         for (std::size_t stack_index = 0; stack_index < counts.size(); ++stack_index) {
             counts[stack_index] = visual_state().hidden_card_count(stack_index);
         }
@@ -1269,6 +1418,34 @@ private:
         }
     }
 
+    void render_stock_deal_flights(const spider::LayoutMetrics& layout)
+    {
+        if (!stock_deal_active()) {
+            return;
+        }
+
+        const SDL_FRect source = top_row_slot_rect(layout, 0);
+        for (std::size_t step_index = 0; step_index < stock_deal_animation_->steps.size(); ++step_index) {
+            const float start_time = stock_deal_start_time(step_index);
+            const float finish_time = stock_deal_finish_time(step_index);
+            if (stock_deal_animation_->elapsed_seconds < start_time || stock_deal_animation_->elapsed_seconds >= finish_time) {
+                continue;
+            }
+
+            const auto& step = stock_deal_animation_->steps[step_index];
+            const SDL_FRect target = stack_card_rect(layout, step.stack_index, step.card_index);
+            const float progress = smoothstep((stock_deal_animation_->elapsed_seconds - start_time) / kStockDealCardFlightSeconds);
+            const float arc = std::sin(progress * 3.14159265F) * kStockDealArcHeight;
+            const SDL_FRect destination {
+                lerp(source.x, target.x, progress),
+                lerp(source.y, target.y, progress) - arc,
+                layout.card_width,
+                layout.card_height,
+            };
+            render_card_sprite(destination, step.card, false);
+        }
+    }
+
     void render_completed_run_flights(const spider::LayoutMetrics& layout)
     {
         if (!completed_run_active()) {
@@ -1321,11 +1498,33 @@ private:
         }
     }
 
+    void render_stock_deal_tableau(const spider::LayoutMetrics& layout)
+    {
+        const TableauCards tableau = current_stock_deal_tableau();
+        for (std::size_t stack_index = 0; stack_index < tableau.size(); ++stack_index) {
+            const SDL_FRect slot {
+                layout.stack_x[stack_index],
+                layout.playfield_top + 12.0F,
+                layout.card_width,
+                layout.card_height,
+            };
+
+            SDL_SetRenderDrawColor(renderer_, 36, 108, 56, 255);
+            SDL_RenderRect(renderer_, &slot);
+
+            for (std::size_t card_index = 0; card_index < tableau[stack_index].size(); ++card_index) {
+                render_card_sprite(stack_card_rect(layout, stack_index, card_index), tableau[stack_index][card_index], false);
+            }
+        }
+    }
+
     void render_top_row(const spider::LayoutMetrics& layout)
     {
         const SDL_FRect stock_slot = top_row_slot_rect(layout, 0);
         if (opening_deal_active()) {
             render_card_back_stack(stock_slot, deck_layers_for_card_count(opening_deck_card_count()));
+        } else if (stock_deal_active()) {
+            render_card_back_stack(stock_slot, deck_layers_for_card_count(stock_deal_deck_card_count()));
         } else if (state().stock_rows_remaining() > 0) {
             render_card_back_stack(stock_slot, static_cast<int>(state().stock_rows_remaining()));
         } else {
@@ -1506,6 +1705,9 @@ private:
         if (opening_deal_active()) {
             render_opening_deal_tableau(layout);
             render_opening_deal_flights(layout);
+        } else if (stock_deal_active()) {
+            render_stock_deal_tableau(layout);
+            render_stock_deal_flights(layout);
         } else {
             for (std::size_t stack_index = 0; stack_index < 10; ++stack_index) {
                 render_stack(layout, stack_index);
