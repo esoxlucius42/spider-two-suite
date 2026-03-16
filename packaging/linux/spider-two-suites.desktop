@@ -2,8 +2,10 @@
 Version=1.0
 Type=Application
 Name=Spider Two Suites
-Comment=Play Spider Two Suites
+GenericName=Spider Solitaire
+Comment=Play a two-suit Spider Solitaire game
 Exec=spider_two_suites
+TryExec=spider_two_suites
 Icon=spider-two-suites
 Terminal=false
 Categories=Game;CardGame;
