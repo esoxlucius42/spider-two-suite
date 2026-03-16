@@ -68,12 +68,22 @@ struct OpeningDealAnimation {
     float elapsed_seconds {0.0F};
 };
 
+struct AutoMoveAnimation {
+    spider::GameSession pending_session {};
+    spider::Move move {};
+    std::vector<spider::Card> cards {};
+    std::size_t destination_card_index {};
+    float elapsed_seconds {0.0F};
+};
+
 constexpr std::array<int, 14> kAtlasX {0, 167, 334, 502, 669, 837, 1004, 1172, 1339, 1507, 1674, 1842, 2009, 2179};
 constexpr std::array<int, 6> kAtlasY {0, 243, 487, 730, 972, 1216};
 constexpr std::uint64_t kInitialSeed = 20260315ULL;
 constexpr float kOpeningDealCardStaggerSeconds = 0.05F;
 constexpr float kOpeningDealCardFlightSeconds = 0.28F;
 constexpr float kOpeningDealArcHeight = 28.0F;
+constexpr float kAutoMoveFlightSeconds = 0.22F;
+constexpr float kAutoMoveArcHeight = 20.0F;
 constexpr int kOpeningDeckCardsPerLayer = 10;
 constexpr int kMaximumDeckLayers = 8;
 
@@ -267,6 +277,7 @@ public:
             previous_frame_time = current_frame_time;
 
             update_opening_deal_animation(delta_seconds);
+            update_auto_move_animation(delta_seconds);
             render();
             SDL_Delay(16);
         }
@@ -287,11 +298,22 @@ private:
     std::optional<Button::Action> hovered_button_;
     std::optional<ConfirmationAction> pending_confirmation_;
     std::optional<OpeningDealAnimation> opening_deal_animation_;
+    std::optional<AutoMoveAnimation> auto_move_animation_;
     float press_x_ {0.0F};
     float press_y_ {0.0F};
     std::array<Button, 4> buttons_ {};
     std::array<Button, 2> dialog_buttons_ {};
     bool running_ {true};
+
+    [[nodiscard]] auto opening_deal_active() const -> bool
+    {
+        return opening_deal_animation_.has_value();
+    }
+
+    [[nodiscard]] auto auto_move_active() const -> bool
+    {
+        return auto_move_animation_.has_value();
+    }
 
     [[nodiscard]] auto state() const -> const spider::GameState&
     {
@@ -300,12 +322,12 @@ private:
 
     [[nodiscard]] auto animation_active() const -> bool
     {
-        return opening_deal_animation_.has_value();
+        return opening_deal_active() || auto_move_active();
     }
 
     [[nodiscard]] auto visual_state() const -> const spider::GameState&
     {
-        if (opening_deal_animation_.has_value()) {
+        if (opening_deal_active()) {
             return opening_deal_animation_->pending_session.state();
         }
 
@@ -383,12 +405,31 @@ private:
     auto try_auto_move_card(const Selection& card) -> bool
     {
         const auto move = state().find_auto_move(card.stack_index, card.start_index);
-        if (!move.has_value() || !session_.move_sequence(*move)) {
+        if (!move.has_value()) {
             return false;
         }
 
-        persist_session();
+        const auto& from_stack = state().tableau()[move->from_stack];
+        if (move->start_index >= from_stack.size()) {
+            return false;
+        }
+
+        spider::GameSession next_session = session_;
+        if (!next_session.move_sequence(*move)) {
+            return false;
+        }
+
+        auto_move_animation_ = AutoMoveAnimation {
+            .pending_session = std::move(next_session),
+            .move = *move,
+            .cards = std::vector<spider::Card>(from_stack.begin() + static_cast<std::ptrdiff_t>(move->start_index), from_stack.end()),
+            .destination_card_index = state().tableau()[move->to_stack].size(),
+            .elapsed_seconds = 0.0F,
+        };
+
         clear_selection_state();
+        hovered_button_.reset();
+        hovered_stack_.reset();
         return true;
     }
 
@@ -552,6 +593,7 @@ private:
         reset_for_fresh_layout();
         hovered_button_.reset();
         hovered_stack_.reset();
+        auto_move_animation_.reset();
         opening_deal_animation_ = OpeningDealAnimation {
             .pending_session = std::move(next_session),
             .steps = opening_deal.tableau_steps,
@@ -561,7 +603,7 @@ private:
 
     void update_opening_deal_animation(float delta_seconds)
     {
-        if (!opening_deal_animation_.has_value()) {
+        if (!opening_deal_active()) {
             return;
         }
 
@@ -572,6 +614,22 @@ private:
 
         session_ = std::move(opening_deal_animation_->pending_session);
         opening_deal_animation_.reset();
+        persist_session();
+    }
+
+    void update_auto_move_animation(float delta_seconds)
+    {
+        if (!auto_move_active()) {
+            return;
+        }
+
+        auto_move_animation_->elapsed_seconds += std::max(delta_seconds, 0.0F);
+        if (auto_move_animation_->elapsed_seconds < kAutoMoveFlightSeconds) {
+            return;
+        }
+
+        session_ = std::move(auto_move_animation_->pending_session);
+        auto_move_animation_.reset();
         persist_session();
     }
 
@@ -1045,7 +1103,7 @@ private:
 
     void render_opening_deal_flights(const spider::LayoutMetrics& layout)
     {
-        if (!opening_deal_animation_.has_value()) {
+        if (!opening_deal_active()) {
             return;
         }
 
@@ -1068,6 +1126,29 @@ private:
                 layout.card_height,
             };
             render_card_sprite(destination, step.card, false);
+        }
+    }
+
+    void render_auto_move_flight(const spider::LayoutMetrics& layout)
+    {
+        if (!auto_move_active()) {
+            return;
+        }
+
+        const auto& animation = *auto_move_animation_;
+        const float progress = smoothstep(animation.elapsed_seconds / kAutoMoveFlightSeconds);
+        const float arc = std::sin(progress * 3.14159265F) * kAutoMoveArcHeight;
+
+        for (std::size_t index = 0; index < animation.cards.size(); ++index) {
+            const SDL_FRect source = stack_card_rect(layout, animation.move.from_stack, animation.move.start_index + index);
+            const SDL_FRect target = stack_card_rect(layout, animation.move.to_stack, animation.destination_card_index + index);
+            const SDL_FRect destination {
+                lerp(source.x, target.x, progress),
+                lerp(source.y, target.y, progress) - arc,
+                layout.card_width,
+                layout.card_height,
+            };
+            render_card_sprite(destination, animation.cards[index], false);
         }
     }
 
@@ -1094,7 +1175,7 @@ private:
     void render_top_row(const spider::LayoutMetrics& layout)
     {
         const SDL_FRect stock_slot = top_row_slot_rect(layout, 0);
-        if (animation_active()) {
+        if (opening_deal_active()) {
             render_card_back_stack(stock_slot, deck_layers_for_card_count(opening_deck_card_count()));
         } else if (state().stock_rows_remaining() > 0) {
             render_card_back_stack(stock_slot, static_cast<int>(state().stock_rows_remaining()));
@@ -1132,6 +1213,10 @@ private:
         const auto rects = card_rects_for_stack(layout, stack_index);
 
         for (std::size_t card_index = 0; card_index < stack.size(); ++card_index) {
+            if (auto_move_active() && auto_move_animation_->move.from_stack == stack_index && card_index >= auto_move_animation_->move.start_index) {
+                continue;
+            }
+
             if (drag_state_.has_value() && drag_state_->selection.stack_index == stack_index && card_index >= drag_state_->selection.start_index) {
                 continue;
             }
@@ -1267,7 +1352,7 @@ private:
         };
         SDL_RenderRect(renderer_, &inner_surface);
 
-        if (animation_active()) {
+        if (opening_deal_active()) {
             render_opening_deal_tableau(layout);
             render_opening_deal_flights(layout);
         } else {
@@ -1276,6 +1361,7 @@ private:
             }
 
             render_drag_stack(layout);
+            render_auto_move_flight(layout);
         }
 
         SDL_SetRenderClipRect(renderer_, nullptr);
