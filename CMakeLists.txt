@@ -69,6 +69,34 @@ if(SPIDER_BUILD_APP)
             FILES_MATCHING
                 PATTERN "*.png"
         )
+
+        find_program(UPDATE_DESKTOP_DATABASE update-desktop-database)
+        if(UPDATE_DESKTOP_DATABASE)
+            install(CODE "
+                execute_process(
+                    COMMAND \"${UPDATE_DESKTOP_DATABASE}\"
+                        \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/applications\"
+                    RESULT_VARIABLE _udd_result
+                )
+                if(NOT _udd_result EQUAL 0)
+                    message(WARNING \"update-desktop-database failed (exit \${_udd_result})\")
+                endif()
+            ")
+        endif()
+
+        find_program(GTK_UPDATE_ICON_CACHE gtk-update-icon-cache)
+        if(GTK_UPDATE_ICON_CACHE)
+            install(CODE "
+                execute_process(
+                    COMMAND \"${GTK_UPDATE_ICON_CACHE}\" -f -t
+                        \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_DATADIR}/icons/hicolor\"
+                    RESULT_VARIABLE _guic_result
+                )
+                if(NOT _guic_result EQUAL 0)
+                    message(WARNING \"gtk-update-icon-cache failed (exit \${_guic_result})\")
+                endif()
+            ")
+        endif()
     endif()
 endif()
 

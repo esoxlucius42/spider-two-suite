@@ -44,7 +44,12 @@ The repository includes `packaging/linux/spider-two-suites.desktop`, and CMake a
 cmake --install build/app-default --prefix ~/.local
 ```
 
-After installation, your desktop environment should list **Spider Two Suites** in the application menu. If it does not appear immediately, log out and back in or run your desktop database refresh tool for the current environment.
+After installation, your desktop environment should list **Spider Two Suites** in the application menu. CMake runs the necessary refresh commands automatically. If the entry still does not appear, run them manually:
+
+```bash
+update-desktop-database ~/.local/share/applications
+gtk-update-icon-cache -f -t ~/.local/share/icons/hicolor
+```
 
 ## Windows
 
