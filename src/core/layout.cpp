@@ -23,7 +23,7 @@ auto compute_layout(
 
     layout.outer_margin = width * 0.02F;
     layout.top_controls_height = height / 16.0F;
-    layout.stack_gap = width * 0.008F;
+    layout.stack_gap = width * 0.016F;
     const float available_tableau_width = std::max(0.0F, width - (layout.outer_margin * 2.0F) - (layout.stack_gap * 9.0F));
     layout.card_width = std::min(preferred_card_width, available_tableau_width / 10.0F);
     layout.card_height = preferred_card_height;

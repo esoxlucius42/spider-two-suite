@@ -348,7 +348,7 @@ int main()
         const auto squeezed = spider::compute_layout(560, 900, tall_counts, tall_hidden, 0.0F);
 
         const auto roomy = spider::compute_layout(1600, 900, small_counts, small_hidden, 0.0F);
-        const auto tight = spider::compute_layout(900, 640, tall_counts, tall_hidden, 400.0F);
+        const auto tight = spider::compute_layout(950, 640, tall_counts, tall_hidden, 400.0F);
         const float roomy_top_row_spacer = roomy.top_row_slot_x[1] - (roomy.top_row_slot_x[0] + roomy.card_width);
         const float tight_top_row_spacer = tight.top_row_slot_x[1] - (tight.top_row_slot_x[0] + tight.card_width);
 
@@ -372,7 +372,7 @@ int main()
         expect_near(roomy.top_row_slot_x[0], roomy.outer_margin, 0.01F, "roomy layout should keep the stock pile left-aligned");
         expect_near(tight.top_row_slot_x[0], tight.outer_margin, 0.01F, "tight layout should keep the stock pile left-aligned");
         expect_near(roomy.top_row_slot_x[8] + roomy.card_width, 1600.0F - roomy.outer_margin, 0.01F, "roomy layout should right-align the last completed pile slot");
-        expect_near(tight.top_row_slot_x[8] + tight.card_width, 900.0F - tight.outer_margin, 0.01F, "tight layout should right-align the last completed pile slot");
+        expect_near(tight.top_row_slot_x[8] + tight.card_width, 950.0F - tight.outer_margin, 0.01F, "tight layout should right-align the last completed pile slot");
         expect_near(roomy.top_row_slot_x[2] - roomy.top_row_slot_x[1], roomy.card_width + roomy.stack_gap, 0.01F, "roomy completed pile slots should keep the configured spacing");
         expect_near(tight.top_row_slot_x[2] - tight.top_row_slot_x[1], tight.card_width + tight.stack_gap, 0.01F, "tight completed pile slots should keep the configured spacing");
         expect(roomy_top_row_spacer > tight_top_row_spacer, "wider windows should grow the empty top-row spacer");
@@ -393,7 +393,7 @@ int main()
             "roomy layout should center the tableau band");
         expect_near(
             tight.stack_x[0],
-            tight.outer_margin + ((900.0F - tight.outer_margin * 2.0F) - tight_tableau_width) / 2.0F,
+            tight.outer_margin + ((950.0F - tight.outer_margin * 2.0F) - tight_tableau_width) / 2.0F,
             0.01F,
             "tight layout should center the tableau band");
         expect_near(
@@ -403,7 +403,7 @@ int main()
             "roomy layout should balance left and right tableau margins");
         expect_near(
             tight.stack_x[9] + tight.card_width,
-            900.0F - tight.stack_x[0],
+            950.0F - tight.stack_x[0],
             0.01F,
             "tight layout should balance left and right tableau margins");
         expect(tight.stack_vertical_offset < roomy.stack_vertical_offset, "stack spacing should recompute when resize changes card size");
