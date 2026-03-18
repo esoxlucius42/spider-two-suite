@@ -46,9 +46,14 @@ auto compute_layout(
             completed_row_start + static_cast<float>(slot_index - 1) * (layout.card_width + layout.stack_gap);
     }
 
+    const float total_tableau_width = layout.card_width * 10.0F + layout.stack_gap * 9.0F;
+    const float centered_tableau_start = layout.outer_margin
+        + std::max(0.0F, width - (layout.outer_margin * 2.0F) - total_tableau_width) / 2.0F;
+
     float tallest_stack = 0.0F;
     for (std::size_t stack_index = 0; stack_index < layout.stack_x.size(); ++stack_index) {
-        layout.stack_x[stack_index] = layout.outer_margin + static_cast<float>(stack_index) * (layout.card_width + layout.stack_gap);
+        layout.stack_x[stack_index] =
+            centered_tableau_start + static_cast<float>(stack_index) * (layout.card_width + layout.stack_gap);
 
         const std::size_t total_cards = stack_card_counts[stack_index];
 

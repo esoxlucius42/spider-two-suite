@@ -384,6 +384,28 @@ int main()
         expect_near(roomy.card_width, roomy.card_height / 1.45F, 0.01F, "roomy layout should preserve the existing card aspect ratio when width allows it");
         expect_near(tight.card_width, tight.card_height / 1.45F, 0.01F, "tight layout should preserve the existing card aspect ratio when width allows it");
         expect(squeezed.card_width < squeezed.card_height / 1.45F, "squeezed layout should compress card width to keep the tableau visible");
+        const float roomy_tableau_width = roomy.card_width * 10.0F + roomy.stack_gap * 9.0F;
+        const float tight_tableau_width = tight.card_width * 10.0F + tight.stack_gap * 9.0F;
+        expect_near(
+            roomy.stack_x[0],
+            roomy.outer_margin + ((1600.0F - roomy.outer_margin * 2.0F) - roomy_tableau_width) / 2.0F,
+            0.01F,
+            "roomy layout should center the tableau band");
+        expect_near(
+            tight.stack_x[0],
+            tight.outer_margin + ((900.0F - tight.outer_margin * 2.0F) - tight_tableau_width) / 2.0F,
+            0.01F,
+            "tight layout should center the tableau band");
+        expect_near(
+            roomy.stack_x[9] + roomy.card_width,
+            1600.0F - roomy.stack_x[0],
+            0.01F,
+            "roomy layout should balance left and right tableau margins");
+        expect_near(
+            tight.stack_x[9] + tight.card_width,
+            900.0F - tight.stack_x[0],
+            0.01F,
+            "tight layout should balance left and right tableau margins");
         expect(tight.stack_vertical_offset < roomy.stack_vertical_offset, "stack spacing should recompute when resize changes card size");
         expect(tight.scroll_offset >= 0.0F, "scroll offset should remain non-negative");
         expect(tight.content_height >= tight.playfield_height, "tall layouts should produce scrollable content");
